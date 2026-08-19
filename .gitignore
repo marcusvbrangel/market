@@ -1,0 +1,123 @@
+# Build outputs
+inventory/target/
+build/
+out/
+bin/
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+*.zip
+*.tar.gz
+*.rar
+
+# Keep build-tool wrapper artifacts versioned
+!.mvn/wrapper/maven-wrapper.jar
+!gradle/wrapper/gradle-wrapper.jar
+
+# Maven
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+.flattened-pom.xml
+.mvn/timing.properties
+.mvn/wrapper/maven-wrapper.properties.bak
+
+# Gradle
+.gradle/
+gradle-app.setting
+.gradletasknamecache
+
+# Spring Boot
+spring-shell.log
+*.pid
+*.pid.lock
+application-local.properties
+application-local.yml
+application-local.yaml
+application-*.local.properties
+application-*.local.yml
+application-*.local.yaml
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+
+# Logs and JVM runtime files
+logs/
+log/
+*.log
+*.log.*
+*.hprof
+hs_err_pid*
+replay_pid*
+
+# Test and coverage reports
+.coverage/
+coverage/
+*.exec
+jacoco.exec
+
+# IntelliJ IDEA
+.idea/
+*.iws
+*.iml
+*.ipr
+
+# Eclipse / Spring Tool Suite
+.apt_generated/
+.classpath
+.factorypath
+.project
+.settings/
+.springBeans
+.sts4-cache/
+
+# Visual Studio Code
+.vscode/
+
+# NetBeans
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+
+# JRebel and Lombok
+rebel.xml
+.lombok/
+
+# Operating system files
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon?
+._*
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+.cache/
+.tmp/
+tmp/
+
+# Spring Initializr documentation
+HELP.md
+
