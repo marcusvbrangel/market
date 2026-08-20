@@ -1,3 +1,20 @@
 spring:
   application:
     name: order
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: true
+  datasource:
+    url: ${ORDER_DB_URL:jdbc:postgresql://localhost:5432/order_db}
+    username: ${ORDER_DB_USERNAME:order_user}
+    password: ${ORDER_DB_PASSWORD:1234}
+  flyway:
+    enabled: true
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC

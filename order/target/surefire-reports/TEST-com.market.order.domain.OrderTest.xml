@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" version="3.0.2" name="com.market.order.OrderApplicationTests" time="12.258" tests="4" errors="0" skipped="0" failures="0" flakes="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" version="3.0.2" name="com.market.order.domain.OrderTest" time="0.275" tests="6" errors="0" skipped="0" failures="0" flakes="0">
   <properties>
     <property name="java.specification.version" value="21"/>
     <property name="sun.jnu.encoding" value="UTF-8"/>
@@ -7,11 +7,8 @@
     <property name="java.vm.vendor" value="Eclipse Adoptium"/>
     <property name="sun.arch.data.model" value="64"/>
     <property name="java.vendor.url" value="https://adoptium.net/"/>
-    <property name="user.timezone" value="America/Sao_Paulo"/>
-    <property name="org.jboss.logging.provider" value="slf4j"/>
     <property name="os.name" value="Linux"/>
     <property name="java.vm.specification.version" value="21"/>
-    <property name="APPLICATION_NAME" value="order"/>
     <property name="sun.java.launcher" value="SUN_STANDARD"/>
     <property name="sun.boot.library.path" value="/home/wolf/.sdkman/candidates/java/21.0.11-tem/lib"/>
     <property name="sun.java.command" value="/home/wolf/Documentos/desenvolvimento/market/order/target/surefire/surefirebooter-20260819201533163_3.jar /home/wolf/Documentos/desenvolvimento/market/order/target/surefire 2026-08-19T20-15-32_996-jvmRun1 surefire-20260819201533163_1tmp surefire_0-20260819201533163_2tmp"/>
@@ -29,10 +26,7 @@
     <property name="line.separator" value="&#10;"/>
     <property name="java.specification.name" value="Java Platform API Specification"/>
     <property name="java.vm.specification.vendor" value="Oracle Corporation"/>
-    <property name="FILE_LOG_CHARSET" value="UTF-8"/>
-    <property name="java.awt.headless" value="true"/>
     <property name="surefire.real.class.path" value="/home/wolf/Documentos/desenvolvimento/market/order/target/surefire/surefirebooter-20260819201533163_3.jar"/>
-    <property name="polyglot.engine.WarnInterpreterOnly" value="false"/>
     <property name="sun.management.compiler" value="HotSpot 64-Bit Tiered Compilers"/>
     <property name="java.runtime.version" value="21.0.11+10-LTS"/>
     <property name="user.name" value="wolf"/>
@@ -46,13 +40,10 @@
     <property name="localRepository" value="/home/wolf/.m2/repository"/>
     <property name="java.vendor.url.bug" value="https://github.com/adoptium/adoptium-support/issues"/>
     <property name="java.io.tmpdir" value="/tmp"/>
-    <property name="com.zaxxer.hikari.pool_number" value="1"/>
     <property name="java.version" value="21.0.11"/>
     <property name="user.dir" value="/home/wolf/Documentos/desenvolvimento/market/order"/>
     <property name="os.arch" value="amd64"/>
     <property name="java.vm.specification.name" value="Java Virtual Machine Specification"/>
-    <property name="PID" value="642423"/>
-    <property name="CONSOLE_LOG_CHARSET" value="UTF-8"/>
     <property name="native.encoding" value="UTF-8"/>
     <property name="java.library.path" value="/usr/java/packages/lib:/usr/lib64:/lib64:/lib:/usr/lib"/>
     <property name="java.vm.info" value="mixed mode, sharing"/>
@@ -61,83 +52,11 @@
     <property name="java.vm.version" value="21.0.11+10-LTS"/>
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="65.0"/>
-    <property name="LOGGED_APPLICATION_NAME" value="[order] "/>
   </properties>
-  <testcase name="shouldReturnEmptyForUnknownOrder" classname="com.market.order.OrderApplicationTests" time="0.146">
-    <system-out><![CDATA[20:15:36.472 [main] INFO org.springframework.test.context.support.AnnotationConfigContextLoaderUtils -- Could not detect default configuration classes for test class [com.market.order.OrderApplicationTests]: OrderApplicationTests does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
-20:15:36.575 [main] INFO org.testcontainers.images.PullPolicy -- Image pull policy will be performed by: DefaultPullPolicy()
-20:15:36.577 [main] INFO org.testcontainers.utility.ImageNameSubstitutor -- Image name substitution will be performed by: DefaultImageNameSubstitutor (composite of 'ConfigurationFileImageNameSubstitutor' and 'PrefixingImageNameSubstitutor')
-20:15:36.593 [main] INFO org.testcontainers.DockerClientFactory -- Testcontainers version: 2.0.5
-20:15:36.857 [main] INFO org.testcontainers.dockerclient.DockerClientProviderStrategy -- Loaded org.testcontainers.dockerclient.UnixSocketClientProviderStrategy from ~/.testcontainers.properties, will try it first
-20:15:37.677 [main] INFO org.testcontainers.dockerclient.DockerClientProviderStrategy -- Found Docker environment with local Unix socket (unix:///var/run/docker.sock)
-20:15:37.679 [main] INFO org.testcontainers.DockerClientFactory -- Docker host IP address is localhost
-20:15:37.702 [main] INFO org.testcontainers.DockerClientFactory -- Connected to docker: 
-  Server Version: 29.7.2
-  API Version: 1.55
-  Operating System: Ubuntu 26.04 LTS
-  Total Memory: 15354 MB
-20:15:37.807 [main] INFO tc.testcontainers/ryuk:0.14.0 -- Creating container for image: testcontainers/ryuk:0.14.0
-20:15:37.813 [main] INFO org.testcontainers.utility.RegistryAuthLocator -- Failure when attempting to lookup auth config. Please ignore if you don't have images in an authenticated registry. Details: (dockerImageName: testcontainers/ryuk:0.14.0, configFile: /home/wolf/.docker/config.json, configEnv: DOCKER_AUTH_CONFIG). Falling back to docker-java default behaviour. Exception message: Status 404: No config supplied. Checked in order: /home/wolf/.docker/config.json (file not found), DOCKER_AUTH_CONFIG (not set)
-20:15:38.154 [main] INFO tc.testcontainers/ryuk:0.14.0 -- Container testcontainers/ryuk:0.14.0 is starting: c2c2d54b2ff198ef729bfac5b1d0e089af363a183d429cbb645ec95574426b06
-20:15:38.584 [main] INFO tc.testcontainers/ryuk:0.14.0 -- Container testcontainers/ryuk:0.14.0 started in PT0.77718642S
-20:15:38.606 [main] INFO org.testcontainers.utility.RyukResourceReaper -- Ryuk started - will monitor and terminate Testcontainers containers on JVM exit
-20:15:38.606 [main] INFO org.testcontainers.DockerClientFactory -- Checking the system...
-20:15:38.608 [main] INFO org.testcontainers.DockerClientFactory -- ✔︎ Docker server version should be at least 1.6.0
-20:15:38.805 [main] INFO org.springframework.boot.test.context.SpringBootTestContextBootstrapper -- Found @SpringBootConfiguration com.market.order.OrderApplication for test class com.market.order.OrderApplicationTests
-20:15:38.948 [main] INFO org.springframework.test.context.support.AnnotationConfigContextLoaderUtils -- Could not detect default configuration classes for test class [com.market.order.OrderApplicationTests]: OrderApplicationTests does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
-20:15:38.964 [main] INFO org.springframework.boot.test.context.SpringBootTestContextBootstrapper -- Found @SpringBootConfiguration com.market.order.OrderApplication for test class com.market.order.OrderApplicationTests
-20:15:39.005 [main] INFO tc.postgres:17.10-alpine -- Creating container for image: postgres:17.10-alpine
-20:15:39.163 [main] INFO tc.postgres:17.10-alpine -- Container postgres:17.10-alpine is starting: c68a7edc02c3fb1a5e68c11a1e939bbaa24443109d22ff50921ee470db1a24de
-20:15:41.285 [main] INFO tc.postgres:17.10-alpine -- Container postgres:17.10-alpine started in PT2.280051533S
-20:15:41.286 [main] INFO tc.postgres:17.10-alpine -- Container is started (JDBC URL: jdbc:postgresql://localhost:32781/order_db?loggerLevel=OFF)
-
-  .   ____          _            __ _ _
- /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
-( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
- \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
-  '  |____| .__|_| |_|_| |_\__, | / / / /
- =========|_|==============|___/=/_/_/_/
-
- :: Spring Boot ::                (v4.0.7)
-
-2026-08-19T20:15:41.769-03:00  INFO 642423 --- [order] [           main] com.market.order.OrderApplicationTests   : Starting OrderApplicationTests using Java 21.0.11 with PID 642423 (started by wolf in /home/wolf/Documentos/desenvolvimento/market/order)
-2026-08-19T20:15:41.771-03:00  INFO 642423 --- [order] [           main] com.market.order.OrderApplicationTests   : No active profile set, falling back to 1 default profile: "default"
-2026-08-19T20:15:42.660-03:00  INFO 642423 --- [order] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Bootstrapping Spring Data JPA repositories in DEFAULT mode.
-2026-08-19T20:15:42.730-03:00  INFO 642423 --- [order] [           main] .s.d.r.c.RepositoryConfigurationDelegate : Finished Spring Data repository scanning in 59 ms. Found 1 JPA repository interface.
-2026-08-19T20:15:43.895-03:00  INFO 642423 --- [order] [           main] org.flywaydb.core.FlywayExecutor         : Database: jdbc:postgresql://localhost:32781/order_db?loggerLevel=OFF (PostgreSQL 17.10)
-2026-08-19T20:15:43.957-03:00  INFO 642423 --- [order] [           main] o.f.c.i.s.JdbcTableSchemaHistory         : Schema history table "public"."flyway_schema_history" does not exist yet
-2026-08-19T20:15:43.961-03:00  INFO 642423 --- [order] [           main] o.f.core.internal.command.DbValidate     : Successfully validated 3 migrations (execution time 00:00.026s)
-2026-08-19T20:15:43.979-03:00  INFO 642423 --- [order] [           main] o.f.c.i.s.JdbcTableSchemaHistory         : Creating Schema History table "public"."flyway_schema_history" ...
-2026-08-19T20:15:44.112-03:00  INFO 642423 --- [order] [           main] o.f.core.internal.command.DbMigrate      : Current version of schema "public": << Empty Schema >>
-2026-08-19T20:15:44.140-03:00  INFO 642423 --- [order] [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "1 - create orders and order items"
-2026-08-19T20:15:44.201-03:00  INFO 642423 --- [order] [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "2 - insert sample order"
-2026-08-19T20:15:44.224-03:00  INFO 642423 --- [order] [           main] o.f.core.internal.command.DbMigrate      : Migrating schema "public" to version "3 - support order creation and outbox"
-2026-08-19T20:15:44.263-03:00  INFO 642423 --- [order] [           main] o.f.core.internal.command.DbMigrate      : Successfully applied 3 migrations to schema "public", now at version v3 (execution time 00:00.064s)
-2026-08-19T20:15:44.391-03:00  INFO 642423 --- [order] [           main] org.hibernate.orm.jpa                    : HHH008540: Processing PersistenceUnitInfo [name: default]
-2026-08-19T20:15:44.465-03:00  INFO 642423 --- [order] [           main] org.hibernate.orm.core                   : HHH000001: Hibernate ORM core version 7.2.19.Final
-2026-08-19T20:15:44.882-03:00  INFO 642423 --- [order] [           main] o.s.o.j.p.SpringPersistenceUnitInfo      : No LoadTimeWeaver setup: ignoring JPA class transformer
-2026-08-19T20:15:44.936-03:00  INFO 642423 --- [order] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
-2026-08-19T20:15:44.981-03:00  INFO 642423 --- [order] [           main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection org.postgresql.jdbc.PgConnection@673a702a
-2026-08-19T20:15:44.986-03:00  INFO 642423 --- [order] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
-2026-08-19T20:15:45.083-03:00  INFO 642423 --- [order] [           main] org.hibernate.orm.connections.pooling    : HHH10001005: Database info:
-	Database JDBC URL [jdbc:postgresql://localhost:32781/order_db?loggerLevel=OFF]
-	Database driver: PostgreSQL JDBC Driver
-	Database dialect: PostgreSQLDialect
-	Database version: 17.10
-	Default catalog/schema: order_db/public
-	Autocommit mode: undefined/unknown
-	Isolation level: READ_COMMITTED [default READ_COMMITTED]
-	JDBC fetch size: none
-	Pool: DataSourceConnectionProvider
-	Minimum pool size: undefined/unknown
-	Maximum pool size: undefined/unknown
-2026-08-19T20:15:46.267-03:00  INFO 642423 --- [order] [           main] org.hibernate.orm.core                   : HHH000489: No JTA platform available (set 'hibernate.transaction.jta.platform' to enable JTA platform integration)
-2026-08-19T20:15:46.404-03:00  INFO 642423 --- [order] [           main] j.LocalContainerEntityManagerFactoryBean : Initialized JPA EntityManagerFactory for persistence unit 'default'
-2026-08-19T20:15:46.559-03:00  INFO 642423 --- [order] [           main] o.s.d.j.r.query.QueryEnhancerFactories   : Hibernate is in classpath; If applicable, HQL parser will be used.
-2026-08-19T20:15:47.648-03:00  INFO 642423 --- [order] [           main] com.market.order.OrderApplicationTests   : Started OrderApplicationTests in 6.325 seconds (process running for 14.352)
-]]></system-out>
-  </testcase>
-  <testcase name="shouldApplyMigrationsAndLoadPersistedOrder" classname="com.market.order.OrderApplicationTests" time="0.128"/>
-  <testcase name="shouldPersistNewOrderAndOutboxEventInTheSameFlow" classname="com.market.order.OrderApplicationTests" time="0.133"/>
-  <testcase name="shouldRejectProductNameAndPriceInCreationContract" classname="com.market.order.OrderApplicationTests" time="0.044"/>
+  <testcase name="shouldCreatePendingOrderWithoutProductNameOrPrices" classname="com.market.order.domain.OrderTest" time="0.169"/>
+  <testcase name="shouldRejectOrderWithoutItems" classname="com.market.order.domain.OrderTest" time="0.016"/>
+  <testcase name="shouldRequireReasonForRejectedOrder" classname="com.market.order.domain.OrderTest" time="0.003"/>
+  <testcase name="shouldRejectOrderWhenTotalDoesNotMatchItems" classname="com.market.order.domain.OrderTest" time="0.007"/>
+  <testcase name="shouldRejectInvalidItemSubtotal" classname="com.market.order.domain.OrderTest" time="0.005"/>
+  <testcase name="shouldCreateValidOrderAndProtectItemsFromMutation" classname="com.market.order.domain.OrderTest" time="0.023"/>
 </testsuite>

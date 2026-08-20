@@ -1,1 +1,5 @@
 /home/wolf/Documentos/desenvolvimento/market/order/src/test/java/com/market/order/OrderApplicationTests.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/test/java/com/market/order/application/CreateOrderServiceTest.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/test/java/com/market/order/application/OrderQueryServiceTest.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/test/java/com/market/order/domain/OrderTest.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/test/java/com/market/order/interfaces/rest/OrderControllerTest.java

@@ -1,5 +1,6 @@
 package com.market.order.interfaces.rest;
 
+import com.market.order.domain.Order;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
@@ -19,8 +20,8 @@ public record OrderResponse(
         @NotNull UUID customerId,
         @NotNull Status status,
         @NotEmpty List<@Valid Item> items,
-        @NotNull @DecimalMin("0.00") BigDecimal totalAmount,
-        @NotBlank @Size(min = 3, max = 3) String currency,
+        @DecimalMin("0.00") BigDecimal totalAmount,
+        @Size(min = 3, max = 3) String currency,
         @Size(max = 500) String rejectionReason,
         @NotNull Instant createdAt,
         @NotNull Instant updatedAt
@@ -28,6 +29,32 @@ public record OrderResponse(
 
     public OrderResponse {
         items = items == null ? null : List.copyOf(items);
+    }
+
+    public static OrderResponse from(Order order) {
+        var responseItems = order.items().stream()
+                .map(item -> new Item(
+                        item.id(),
+                        item.productId(),
+                        item.productName(),
+                        item.quantity(),
+                        item.unitPrice(),
+                        item.subtotal()
+                ))
+                .toList();
+
+        return new OrderResponse(
+                order.id(),
+                order.orderNumber(),
+                order.customerId(),
+                Status.valueOf(order.status().name()),
+                responseItems,
+                order.totalAmount(),
+                order.currency(),
+                order.rejectionReason(),
+                order.createdAt(),
+                order.updatedAt()
+        );
     }
 
     public enum Status {
@@ -39,10 +66,10 @@ public record OrderResponse(
     public record Item(
             @NotNull UUID id,
             @NotNull UUID productId,
-            @NotBlank @Size(max = 200) String productName,
+            @Size(max = 200) String productName,
             @Positive int quantity,
-            @NotNull @DecimalMin("0.00") BigDecimal unitPrice,
-            @NotNull @DecimalMin("0.00") BigDecimal subtotal
+            @DecimalMin("0.00") BigDecimal unitPrice,
+            @DecimalMin("0.00") BigDecimal subtotal
     ) {
     }
 }
