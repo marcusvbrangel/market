@@ -166,3 +166,50 @@ Legenda:
 - [x] Registrar a decisão de nomenclatura no ADR 0001.
 - [x] Documentar payload, headers, configuração, garantias, retry e limitações.
 - [x] Confirmar por busca integral que não restaram identificadores obsoletos.
+
+## 11. Idempotência HTTP e constraints do pedido
+
+- [x] Registrar as decisões do checkout no ADR 0002.
+- [x] Exigir `Idempotency-Key` em `POST /api/v1/orders`.
+- [x] Validar chave opaca com 1 a 100 caracteres e formato `[A-Za-z0-9._:-]{1,100}`.
+- [x] Definir o escopo da chave por `(customerId, idempotencyKey)`.
+- [x] Criar `OrderCreationRequestHasher` com formato canônico versionado.
+- [x] Encapsular versão e hash em `OrderCreationRequestFingerprint` e comparar os dois componentes no replay.
+- [x] Ordenar itens por `productId` antes de calcular o hash.
+- [x] Calcular SHA-256 em hexadecimal minúsculo.
+- [x] Rejeitar produto repetido antes de acessar a persistência.
+- [x] Proteger produto único também no domínio.
+- [x] Criar `CreateOrderResult` para representar criação e replay sem acoplar a aplicação ao HTTP.
+- [x] Criar migration `V5__add_order_creation_idempotency.sql`.
+- [x] Criar tabela dedicada `api_idempotency`.
+- [x] Garantir chave primária por `(customer_id, idempotency_key)`.
+- [x] Persistir `request_hash_version=1` e protegê-lo com constraint.
+- [x] Adicionar `UNIQUE (id, customer_id)` em `orders` e foreign key composta do claim para o pedido do mesmo cliente.
+- [x] Persistir somente os campos necessários para reconstruir `CreateOrderResponse`.
+- [x] Criar claim atômico com `INSERT ... ON CONFLICT DO NOTHING`.
+- [x] Usar foreign key diferida entre claim e pedido na mesma transação.
+- [x] Manter claim, pedido, itens e Outbox atomicamente consistentes.
+- [x] Delimitar a transação em `PostgresOrderCreationAdapter.createOrReplay` e manter validação e canonicalização fora dela.
+- [x] Truncar o `Instant` da criação para microssegundos e preservar `createdAt` exatamente no replay.
+- [x] Retornar `201`, `Location` e `Idempotency-Replayed: false` na primeira criação.
+- [x] Retornar `201`, o mesmo `Location`, o mesmo corpo e `Idempotency-Replayed: true` no replay.
+- [x] Retornar `409` e `IDEMPOTENCY_KEY_REUSED` para a mesma chave com versão ou hash diferente.
+- [x] Retornar `400` e `INVALID_IDEMPOTENCY_KEY` para chave presente inválida.
+- [x] Retornar `400` e `DUPLICATE_PRODUCT` para produto repetido.
+- [x] Não consumir a chave quando a validação de produto falhar.
+- [x] Adicionar constraints de presença conjunta de preço e moeda no pedido.
+- [x] Exigir no PostgreSQL que pedido `CONFIRMED` possua `total_amount` e `currency`; manter no domínio a coerência entre esse cabeçalho e os preços de todos os itens.
+- [x] Restringir a moeda persistida a `BRL` no PostgreSQL.
+- [x] Adicionar constraint de presença conjunta dos campos de preço do item.
+- [x] Adicionar unicidade por `(order_id, product_id)`.
+- [x] Atualizar o contrato OpenAPI com os headers, a resposta `409` e `$ref` para `ApiProblemResponse` em `400`/`409`.
+- [x] Criar testes do fingerprint v1, vetor SHA-256 conhecido e independência da ordem dos itens.
+- [x] Criar testes de service para chave inválida e produto repetido antes da porta.
+- [x] Criar testes de controller para header obrigatório, replay e conflito.
+- [x] Criar testes integrados de V5, replay sem duplicação, conflito e constraints.
+- [x] Testar rollback de claim, pedido, itens e Outbox com `TransactionTemplate` e retry posterior da mesma chave.
+- [x] Atualizar a integração Kafka para fornecer a chave obrigatória na criação.
+- [x] Testar criação seguida de replay e exatamente uma publicação Kafka.
+- [x] Criar o guia `order/docs/http-idempotency.md`.
+- [x] Registrar a execução final deste incremento: 50 testes, nenhuma falha, nenhum erro e nenhum teste ignorado em 20/08/2026.
+- [ ] Avaliar em ADR futuro um harness concorrente apenas de teste; a implementação de produção permanece sequencial e protegida pelo claim atômico do PostgreSQL.

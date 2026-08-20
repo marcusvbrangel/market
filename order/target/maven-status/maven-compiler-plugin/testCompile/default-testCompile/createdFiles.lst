@@ -1,7 +1,0 @@
-com/market/order/infrastructure/messaging/TransactionalOutboxPublisherTest.class
-com/market/order/application/CreateOrderServiceTest.class
-com/market/order/interfaces/rest/OrderControllerTest.class
-com/market/order/infrastructure/messaging/OutboxKafkaIntegrationTests.class
-com/market/order/OrderApplicationTests.class
-com/market/order/domain/OrderTest.class
-com/market/order/application/OrderQueryServiceTest.class

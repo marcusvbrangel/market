@@ -1,5 +1,5 @@
 # Build outputs
-inventory/target/
+**/target/
 build/
 out/
 bin/
@@ -120,4 +120,3 @@ tmp/
 
 # Spring Initializr documentation
 HELP.md
-

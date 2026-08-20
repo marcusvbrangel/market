@@ -17,7 +17,7 @@ public record CreateOrderRequest(
         )
         @NotNull UUID customerId,
         @ArraySchema(arraySchema = @Schema(description = "Itens solicitados"), minItems = 1)
-        @NotEmpty List<@Valid Item> items
+        @NotEmpty List<@NotNull @Valid Item> items
 ) {
 
     public CreateOrderRequest {

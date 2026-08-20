@@ -93,6 +93,41 @@ class OrderTest {
                 .hasMessage("Subtotal must equal unit price multiplied by quantity");
     }
 
+    @Test
+    void shouldRejectDuplicateProduct() {
+        var productId = UUID.randomUUID();
+        var firstItem = OrderItem.requested(UUID.randomUUID(), productId, 1);
+        var secondItem = OrderItem.requested(UUID.randomUUID(), productId, 2);
+
+        assertThatThrownBy(() -> Order.pending(
+                UUID.randomUUID(),
+                "ORD-20260819-DUPLICATE",
+                UUID.randomUUID(),
+                List.of(firstItem, secondItem),
+                Instant.parse("2026-08-19T10:00:00Z")
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining(productId.toString());
+    }
+
+    @Test
+    void shouldRejectCurrencyOtherThanBrl() {
+        assertThatThrownBy(() -> new Order(
+                UUID.randomUUID(),
+                "ORD-20260820-USD",
+                UUID.randomUUID(),
+                OrderStatus.PENDING,
+                List.of(validItem()),
+                new BigDecimal("20.00"),
+                "USD",
+                null,
+                Instant.parse("2026-08-20T10:00:00Z"),
+                Instant.parse("2026-08-20T10:00:00Z")
+        ))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Only BRL currency is supported in the checkout MVP");
+    }
+
     private Order validOrder(List<OrderItem> items, BigDecimal totalAmount) {
         return new Order(
                 UUID.randomUUID(),

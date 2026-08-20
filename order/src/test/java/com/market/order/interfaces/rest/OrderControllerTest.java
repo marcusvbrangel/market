@@ -1,6 +1,8 @@
 package com.market.order.interfaces.rest;
 
 import com.market.order.application.CreateOrderService;
+import com.market.order.application.CreateOrderResult;
+import com.market.order.application.IdempotencyConflictException;
 import com.market.order.application.OrderQueryService;
 import com.market.order.domain.Order;
 import com.market.order.domain.OrderItem;
@@ -33,7 +35,9 @@ class OrderControllerTest {
 
     @BeforeEach
     void setUp() {
-        mockMvc = standaloneSetup(new OrderController(service, createOrderService)).build();
+        mockMvc = standaloneSetup(new OrderController(service, createOrderService))
+                .setControllerAdvice(new OrderApiExceptionHandler())
+                .build();
     }
 
     @Test
@@ -68,9 +72,11 @@ class OrderControllerTest {
     @Test
     void shouldCreateOrderWithoutProductNameOrPrice() throws Exception {
         var order = pendingOrder();
-        when(createOrderService.create(anyUuid(), anyList())).thenReturn(order);
+        var result = CreateOrderResult.created(order);
+        when(createOrderService.create(anyString(), anyUuid(), anyList())).thenReturn(result);
 
         mockMvc.perform(post("/api/v1/orders")
+                        .header("Idempotency-Key", "checkout-controller-001")
                         .contentType("application/json")
                         .content("""
                                 {
@@ -85,6 +91,7 @@ class OrderControllerTest {
                                 """))
                 .andExpect(status().isCreated())
                 .andExpect(header().string("Location", "/api/v1/orders/" + order.id()))
+                .andExpect(header().string("Idempotency-Replayed", "false"))
                 .andExpect(jsonPath("$.id").value(order.id().toString()))
                 .andExpect(jsonPath("$.status").value("PENDING"))
                 .andExpect(jsonPath("$.totalAmount").doesNotExist())
@@ -94,6 +101,7 @@ class OrderControllerTest {
     @Test
     void shouldRejectCreationWithoutItems() throws Exception {
         mockMvc.perform(post("/api/v1/orders")
+                        .header("Idempotency-Key", "checkout-controller-empty")
                         .contentType("application/json")
                         .content("""
                                 {
@@ -101,7 +109,77 @@ class OrderControllerTest {
                                   "items": []
                                 }
                                 """))
-                .andExpect(status().isBadRequest());
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("INVALID_REQUEST"))
+                .andExpect(jsonPath("$.violations[0].field").value("items"));
+    }
+
+    @Test
+    void shouldRequireIdempotencyKey() throws Exception {
+        mockMvc.perform(post("/api/v1/orders")
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "customerId": "0f52f7d1-f83b-4bbc-a1f4-ecac92cc287a",
+                                  "items": [{
+                                    "productId": "6c20b55a-2e09-4473-98a6-411f48a8bb23",
+                                    "quantity": 2
+                                  }]
+                                }
+                                """))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REQUIRED"));
+    }
+
+    @Test
+    void shouldReturnConflictWhenIdempotencyKeyHasDifferentPayload() throws Exception {
+        when(createOrderService.create(anyString(), anyUuid(), anyList()))
+                .thenThrow(new IdempotencyConflictException());
+
+        mockMvc.perform(post("/api/v1/orders")
+                        .header("Idempotency-Key", "checkout-controller-conflict")
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "customerId": "0f52f7d1-f83b-4bbc-a1f4-ecac92cc287a",
+                                  "items": [{
+                                    "productId": "6c20b55a-2e09-4473-98a6-411f48a8bb23",
+                                    "quantity": 2
+                                  }]
+                                }
+                                """))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value("IDEMPOTENCY_KEY_REUSED"));
+    }
+
+    @Test
+    void shouldIdentifyReplayedCreation() throws Exception {
+        var order = pendingOrder();
+        var result = new CreateOrderResult(
+                order.id(),
+                order.orderNumber(),
+                order.status(),
+                order.createdAt(),
+                true
+        );
+        when(createOrderService.create(anyString(), anyUuid(), anyList())).thenReturn(result);
+
+        mockMvc.perform(post("/api/v1/orders")
+                        .header("Idempotency-Key", "checkout-controller-replayed")
+                        .contentType("application/json")
+                        .content("""
+                                {
+                                  "customerId": "0f52f7d1-f83b-4bbc-a1f4-ecac92cc287a",
+                                  "items": [{
+                                    "productId": "6c20b55a-2e09-4473-98a6-411f48a8bb23",
+                                    "quantity": 2
+                                  }]
+                                }
+                                """))
+                .andExpect(status().isCreated())
+                .andExpect(header().string("Location", "/api/v1/orders/" + order.id()))
+                .andExpect(header().string("Idempotency-Replayed", "true"))
+                .andExpect(jsonPath("$.id").value(order.id().toString()));
     }
 
     private Order order() {
@@ -147,5 +225,9 @@ class OrderControllerTest {
 
     private List<CreateOrderService.ItemCommand> anyList() {
         return org.mockito.ArgumentMatchers.anyList();
+    }
+
+    private String anyString() {
+        return org.mockito.ArgumentMatchers.anyString();
     }
 }

@@ -8,7 +8,7 @@ services:
     environment:
       POSTGRES_DB: postgres
       POSTGRES_USER: market_admin
-      POSTGRES_PASSWORD: market_admin_password
+      POSTGRES_PASSWORD: "1234"
     ports:
       - "5432:5432"
     volumes:
@@ -91,6 +91,18 @@ services:
             urls: ["http://redpanda:9644"]
     ports:
       - "8088:8080"
+    networks:
+      - market
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: market-mailhog
+    restart: unless-stopped
+    environment:
+      MH_STORAGE: memory
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "127.0.0.1:8025:8025"
     networks:
       - market
 

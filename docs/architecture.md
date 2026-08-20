@@ -2,11 +2,12 @@
 
 ## 1. Objetivo
 
-O **Market** é um projeto de compras composto por três microsserviços:
+O **Market** é um projeto de compras composto por quatro microsserviços:
 
 - **order**: recebe comandos de compra, controla o ciclo de vida do pedido e orquestra a saga da compra;
 - **inventory**: mantém produtos e estoque, atende consultas de produtos e participa da reserva ou liberação de estoque;
-- **notification**: processa solicitações de notificação decorrentes dos eventos da compra.
+- **payment**: processará pagamentos por meio de um provedor externo e informará seus resultados à saga;
+- **notification**: consome passivamente marcos da compra e envia e-mails sem interferir na saga.
 
 O sistema será desenvolvido como um monorepo, com aplicações independentes e implantáveis separadamente. A arquitetura segue princípios **cloud native** e **Kubernetes-first**, sem acoplar o domínio às APIs do Kubernetes.
 
@@ -20,7 +21,7 @@ Esta documentação descreve a arquitetura-alvo inicial. Nem todos os componente
 | Spring Framework | 7.0.8 |
 | Spring Boot | 4.0.7 |
 | API REST | Spring MVC com `spring-boot-starter-webmvc` |
-| Banco de dados | PostgreSQL, um servidor compartilhado com banco e usuário isolados por microsserviço |
+| Banco de dados | PostgreSQL, um servidor compartilhado com banco e usuário isolados por microsserviço stateful |
 | Migrações | Flyway |
 | Mensageria | Apache Kafka |
 | Resiliência | Resilience4j |
@@ -43,26 +44,32 @@ flowchart LR
     Client[Cliente externo]
     Order[order]
     Inventory[inventory]
+    Payment[payment]
     Notification[notification]
+    Provider[Provedor de pagamento]
+    MailHog[MailHog SMTP local]
     Kafka[(Kafka)]
     Postgres[(Servidor PostgreSQL)]
     OrderDB[(order_db)]
     InventoryDB[(inventory_db)]
-    NotificationDB[(notification_db)]
+    PaymentDB[(payment_db)]
 
     Client -->|REST: comandos e consultas de pedidos| Order
     Client -->|REST: consulta de produtos| Inventory
 
     Order <-->|eventos e comandos| Kafka
     Inventory <-->|eventos e comandos| Kafka
-    Notification <-->|eventos e comandos| Kafka
+    Payment <-->|eventos e comandos| Kafka
+    Kafka -->|comandos de e-mail| Notification
+    Payment <-->|API do provedor| Provider
+    Notification -->|SMTP| MailHog
 
     Order --> OrderDB
     Inventory --> InventoryDB
-    Notification --> NotificationDB
+    Payment --> PaymentDB
     Postgres --- OrderDB
     Postgres --- InventoryDB
-    Postgres --- NotificationDB
+    Postgres --- PaymentDB
 ```
 
 ### 3.1 Comunicação externa
@@ -72,22 +79,26 @@ As APIs REST serão expostas somente onde houver interação externa:
 - **order**: criação e consulta de pedidos e demais operações do ciclo de vida da compra;
 - **inventory**: consulta de produtos e de disponibilidade que possa ser apresentada ao cliente.
 
+O `payment` não possui API externa de negócio definida. A integração com um provedor será síncrona na saída e poderá exigir um endpoint restrito para webhooks, conforme o fornecedor escolhido. Esse endpoint, se necessário, não será uma API REST interna entre microsserviços.
+
 As APIs usarão JSON sobre HTTP, validação de entrada e códigos HTTP semanticamente adequados. No `order`, os contratos REST estão documentados com springdoc-openapi e disponíveis em JSON, YAML e Swagger UI. Os demais microsserviços deverão adotar a mesma abordagem quando suas APIs forem implementadas.
 
 A consulta externa de disponibilidade não representa uma reserva. A disponibilidade definitiva será validada pelo `inventory` durante a saga, evitando que uma consulta anterior seja tratada como garantia de estoque.
 
 ### 3.2 Comunicação interna
 
-Toda comunicação entre `order`, `inventory` e `notification` será assíncrona por Kafka. Não haverá chamadas REST internas entre esses microsserviços na arquitetura inicial.
+Toda comunicação entre `order`, `inventory`, `payment` e `notification` será assíncrona por Kafka. Não haverá chamadas REST internas entre esses microsserviços na arquitetura inicial. O SMTP é uma integração de saída do `notification`, representada localmente pelo MailHog.
 
 Consequências dessa decisão:
 
 - o sistema trabalhará com **consistência eventual**;
 - os microsserviços não dependerão da disponibilidade simultânea uns dos outros;
 - eventos e comandos precisarão de contratos explícitos e versionados;
-- consumidores deverão ser idempotentes;
+- participantes stateful deverão deduplicar mensagens de forma durável;
 - falhas serão tratadas com retries controlados e Dead Letter Topics (DLT);
 - a chave de particionamento deverá preservar a ordem dos eventos de uma mesma compra, preferencialmente usando `orderId`.
+
+O `notification` é uma exceção deliberada à deduplicação durável: ele é stateless, confirma o offset somente após o envio SMTP e aceita a possibilidade de e-mail duplicado se cair depois do envio e antes desse commit.
 
 ### 3.3 Provisionamento dos tópicos Kafka
 
@@ -134,17 +145,32 @@ Responsável por:
 - publicar o resultado de cada operação de estoque;
 - garantir idempotência no processamento dos comandos.
 
-### 4.3 notification
+### 4.3 payment
 
 Responsável por:
 
-- consumir comandos de notificação enviados durante a saga;
-- registrar tentativas e o estado de entrega;
-- executar o envio pelo canal que vier a ser definido;
-- publicar o resultado do processamento quando ele for relevante para a saga;
-- tratar retries e falhas permanentes sem bloquear os demais serviços.
+- processar comandos de pagamento enviados pelo `order`;
+- manter o estado e a trilha de auditoria das tentativas;
+- isolar a integração com o provedor de pagamento;
+- garantir idempotência tanto no consumo quanto na chamada externa;
+- publicar `PaymentCaptured`, recusa, falha conhecida ou necessidade de reconciliação;
+- reconciliar respostas ambíguas sem duplicar cobranças;
+- executar `RefundPayment` de forma idempotente quando uma captura não puder permanecer.
 
-O canal efetivo de notificação, como e-mail, SMS ou push, será definido em especificação própria.
+O `payment` não calculará o preço do pedido nem persistirá dados brutos de cartão. Valor, moeda `BRL` e uma referência segura do meio de pagamento deverão chegar em `ChargePayment`. `AuthorizePayment`, `PaymentAuthorized` e `CancelPayment` ficam fora do MVP. A fronteira completa está na [especificação inicial do `payment`](../payment/docs/spec.md).
+
+### 4.4 notification
+
+Responsável por:
+
+- consumir o comando `NotifyOrderMilestone` enviado pelo `order` depois que cada marco for persistido;
+- renderizar o template correspondente;
+- enviar exclusivamente e-mail por SMTP;
+- confirmar o offset Kafka somente depois do SMTP aceitar a mensagem;
+- tratar falhas temporárias por retry e falhas permanentes por DLT;
+- emitir logs, métricas e alertas operacionais.
+
+O `notification` é passivo em relação à saga: não possui banco, Inbox ou Outbox, não publica `NotificationProcessed` e sua falha nunca altera o pedido. No ambiente local, o SMTP é o MailHog; consulte o [`notification/README.md`](../notification/README.md).
 
 ## 5. Saga orquestrada
 
@@ -158,10 +184,16 @@ sequenceDiagram
     participant Order as order (orquestrador)
     participant Kafka
     participant Inventory as inventory
+    participant Payment as payment
+    participant Provider as provedor de pagamento
     participant Notification as notification
+    participant MailHog as MailHog
 
     Client->>Order: POST /orders
     Order->>Order: Persiste pedido PENDING + outbox
+    Order-->>Kafka: NotifyOrderMilestone(ORDER_RECEIVED)
+    Kafka-->>Notification: NotifyOrderMilestone
+    Notification->>MailHog: Envia e-mail por SMTP
     Order-->>Kafka: ReserveInventory
     Kafka-->>Inventory: ReserveInventory
 
@@ -169,26 +201,65 @@ sequenceDiagram
         Inventory->>Inventory: Reserva estoque + outbox
         Inventory-->>Kafka: InventoryReserved
         Kafka-->>Order: InventoryReserved
-        Order->>Order: Confirma pedido + outbox
-        Order-->>Kafka: SendOrderConfirmation
-        Kafka-->>Notification: SendOrderConfirmation
-        Notification->>Notification: Registra/processa envio + outbox
-        Notification-->>Kafka: NotificationProcessed
-        Kafka-->>Order: NotificationProcessed
+        Order-->>Kafka: NotifyOrderMilestone(INVENTORY_RESERVED)
+        Kafka-->>Notification: NotifyOrderMilestone
+        Notification->>MailHog: Envia e-mail por SMTP
+        Order-->>Kafka: ChargePayment
+        Kafka-->>Payment: ChargePayment
+        Payment->>Payment: Persiste tentativa idempotente
+        Payment->>Provider: Autoriza e captura
+        Provider-->>Payment: Resultado
+
+        alt pagamento capturado
+            Payment->>Payment: Registra captura + outbox
+            Payment-->>Kafka: PaymentCaptured
+            Kafka-->>Order: PaymentCaptured
+            Order-->>Kafka: NotifyOrderMilestone(PAYMENT_CAPTURED)
+            Kafka-->>Notification: NotifyOrderMilestone
+            Notification->>MailHog: Envia e-mail por SMTP
+            Order-->>Kafka: CommitInventoryReservation
+            Kafka-->>Inventory: CommitInventoryReservation
+            Inventory->>Inventory: Confirma reserva e baixa saldo + outbox
+            Inventory-->>Kafka: InventoryReservationCommitted
+            Kafka-->>Order: InventoryReservationCommitted
+            Order->>Order: Confirma pedido + outbox
+            Order-->>Kafka: OrderConfirmed
+            Order-->>Kafka: NotifyOrderMilestone(ORDER_CONFIRMED)
+            Kafka-->>Notification: NotifyOrderMilestone
+            Notification->>MailHog: Envia e-mail por SMTP
+        else pagamento recusado ou falha definitiva
+            Payment->>Payment: Registra resultado + outbox
+            Payment-->>Kafka: PaymentDeclined ou PaymentFailed
+            Kafka-->>Order: Resultado do pagamento
+            Order-->>Kafka: NotifyOrderMilestone(PAYMENT_DECLINED)
+            Kafka-->>Notification: NotifyOrderMilestone
+            Notification->>MailHog: Envia e-mail por SMTP
+            Order-->>Kafka: ReleaseInventoryReservation
+            Kafka-->>Inventory: ReleaseInventoryReservation
+            Inventory-->>Kafka: InventoryReservationReleased
+            Kafka-->>Order: InventoryReservationReleased
+            Order->>Order: Rejeita pedido após compensação
+            Order-->>Kafka: OrderRejected
+            Order-->>Kafka: NotifyOrderMilestone(ORDER_REJECTED)
+        end
     else estoque indisponível
-        Inventory-->>Kafka: InventoryRejected
-        Kafka-->>Order: InventoryRejected
+        Inventory-->>Kafka: InventoryReservationRejected
+        Kafka-->>Order: InventoryReservationRejected
         Order->>Order: Rejeita pedido
+        Order-->>Kafka: OrderRejected
+        Order-->>Kafka: NotifyOrderMilestone(INVENTORY_REJECTED)
     end
 ```
 
-Os nomes finais dos comandos, eventos, tópicos e estados serão definidos nas especificações funcionais. O diagrama representa a direção arquitetural, não um contrato definitivo.
+O ADR 0002 já fixa os contratos financeiros centrais do MVP: `ChargePayment`, `PaymentCaptured`, reconciliação para resultado ambíguo e `RefundPayment`. O catálogo-alvo de `full-architecture.md` fixa também os demais nomes e tópicos; schemas e provisionamento continuam pendentes. Hoje somente `market.order.events.created.v1` está catalogado e provisionado. O restante do diagrama representa a direção arquitetural.
 
-O estado implementado ainda não executa esse fluxo de saga. Atualmente, o `order` persiste o pedido `PENDING` e publica somente `OrderCreated`; não existe consumidor no `inventory`, comando `ReserveInventory` nem transições posteriores. O contrato atual está documentado em [`order/docs/kafka-outbox.md`](../order/docs/kafka-outbox.md).
+O estado implementado ainda não executa esse fluxo de saga. Atualmente, o `order` persiste o pedido `PENDING` e publica somente `OrderCreated`; não existe consumidor no `inventory`, comando `ReserveInventory` nem transições posteriores.
+
+O `payment` é apenas um bootstrap Spring Boot sem domínio, datasource, JPA, Flyway, Kafka ou integração externa, embora `payment_db` e `payment_user` já estejam provisionados no PostgreSQL local. Além disso, `OrderCreated` v1 não possui valor, moeda ou token de pagamento e não pode iniciar uma cobrança. O contrato atual do `order` está documentado em [`order/docs/kafka-outbox.md`](../order/docs/kafka-outbox.md).
 
 ### 5.1 Compensações
 
-Cada etapa que alterar estado deverá definir sua operação compensatória quando ela for necessária. Por exemplo, se uma etapa posterior à reserva falhar de forma definitiva e a compra não puder continuar, o `order` poderá emitir `ReleaseInventory`.
+Cada etapa que alterar estado deverá definir sua operação compensatória quando ela for necessária. Se o pagamento for recusado ou falhar de forma definitiva antes de produzir efeito financeiro, o `order` poderá emitir `ReleaseInventory`. Se o valor já tiver sido capturado e uma etapa posterior impedir a conclusão da compra, o contrato do MVP é `RefundPayment`; `CancelPayment` e autorização sem captura ficam fora deste recorte.
 
 Uma compensação também é uma operação distribuída e poderá falhar. Portanto, deverá ser:
 
@@ -198,7 +269,7 @@ Uma compensação também é uma operação distribuída e poderá falhar. Porta
 - registrada no estado da saga;
 - encaminhada para tratamento operacional quando todas as tentativas se esgotarem.
 
-O sucesso ou a falha de uma notificação não deverá, por padrão, cancelar uma compra já confirmada. Essa regra deverá ser confirmada na especificação da funcionalidade.
+O sucesso ou a falha de uma notificação nunca altera a saga ou o estado comercial do pedido. A DLT e os alertas do `notification` são exclusivamente operacionais.
 
 ## 6. Transactional Outbox
 
@@ -240,16 +311,18 @@ O contrato `OrderCreated` v1 já implementado antecede a consolidação desse en
 
 ## 7. Persistência e isolamento
 
-Os três microsserviços compartilharão um único servidor PostgreSQL, mantendo **isolamento lógico por banco e usuário**:
+Os três microsserviços stateful compartilharão um único servidor PostgreSQL na arquitetura-alvo, mantendo **isolamento lógico por banco e usuário**:
 
 - `order` será proprietário exclusivo de `order_db` e usará `order_user`;
 - `inventory` será proprietário exclusivo de `inventory_db` e usará `inventory_user`;
-- `notification` será proprietário exclusivo de `notification_db` e usará `notification_user`;
+- `payment` será proprietário exclusivo de `payment_db` e usará `payment_user`;
 - um microsserviço não receberá credenciais nem permissão para acessar o banco dos demais;
 - não haverá joins, foreign keys ou transações entre bancos de microsserviços;
 - compartilhamento de informação ocorrerá apenas pelos contratos REST externos ou por Kafka internamente.
 
-Cada serviço terá suas próprias credenciais e migrations Flyway. As migrations serão versionadas junto ao serviço e executadas de maneira controlada no processo de implantação.
+Cada serviço stateful terá suas próprias credenciais e migrations Flyway. As migrations serão versionadas junto ao serviço e executadas de maneira controlada no processo de implantação. O `notification` não usa PostgreSQL por decisão arquitetural.
+
+`payment_db` e `payment_user` já são criados pelo script de inicialização e foram provisionados no PostgreSQL local compartilhado. Isso não significa que a persistência do serviço esteja pronta: o módulo `payment` ainda não possui datasource, JPA, Flyway ou migrations e ainda não está incluído no Docker Compose como aplicação executável.
 
 No ambiente local inicial haverá um único workload PostgreSQL, com Service e armazenamento próprios. O isolamento será lógico, não físico. Essa simplificação reduz o consumo de recursos na máquina local, mas cria um ponto único de falha e não representa por si só uma topologia de produção altamente disponível. A separação futura em instâncias independentes não deverá exigir mudanças no domínio, pois cada serviço continuará proprietário exclusivo de seu banco.
 
@@ -338,11 +411,11 @@ O ambiente inicial será um cluster Kubernetes local criado com **Kind**. Os rec
 Artefatos previstos:
 
 - Namespace;
-- Deployments dos três microsserviços;
+- Deployments dos quatro microsserviços;
 - Services internos;
 - ConfigMaps;
 - Secrets para desenvolvimento local;
-- um servidor PostgreSQL com bancos e usuários isolados por microsserviço;
+- um servidor PostgreSQL com bancos e usuários isolados por microsserviço stateful;
 - Kafka e seus recursos necessários;
 - Prometheus, Loki, Tempo, Grafana e OpenTelemetry Collector;
 - Jobs ou estratégia equivalente para migrations Flyway, caso se mostre necessária;
@@ -379,6 +452,8 @@ O Docker Compose poderá ser usado como conveniência de desenvolvimento, mas os
 
 No ambiente Docker Compose local, o Redpanda Console v3.10.0 está instalado, configurado e validado em `http://localhost:8088` para inspeção operacional dos tópicos, partições, configurações e mensagens. Ele está integrado ao broker, Schema Registry e Admin API pela rede `market_net`. Seu guia de uso está em `infrastructure/kafka/redpanda-console.md`. Esse painel é uma ferramenta de desenvolvimento e não representa exposição pública aprovada para ambientes produtivos.
 
+O MailHog v1.0.1 está configurado como SMTP exclusivamente local em `localhost:1025`, com interface de inspeção em `http://localhost:8025` e armazenamento em memória. Dentro da rede `market_net`, o `notification` usará `mailhog:1025`. O MailHog não deve receber destinatários reais nem ser exposto em ambientes produtivos.
+
 ## 13. Testes automatizados
 
 A estratégia de testes incluirá:
@@ -391,6 +466,7 @@ A estratégia de testes incluirá:
 - testes das APIs REST;
 - testes de serialização, compatibilidade e consumo dos contratos Kafka;
 - testes de idempotência, retry, DLT e outbox;
+- testes de envio SMTP e inspeção dos e-mails capturados pelo MailHog;
 - poucos testes ponta a ponta para as jornadas críticas da compra.
 
 Mocks não substituirão testes reais de PostgreSQL ou Kafka quando o comportamento dessas tecnologias fizer parte do que está sendo validado.
@@ -434,7 +510,7 @@ Decisões aprovadas:
 - comunicação interna exclusivamente por Kafka;
 - saga orquestrada pelo `order`;
 - Transactional Outbox;
-- um servidor PostgreSQL compartilhado, com banco e usuário isolados por microsserviço;
+- um servidor PostgreSQL compartilhado, com banco e usuário isolados por microsserviço stateful;
 - Flyway para migrations;
 - Resilience4j para resiliência síncrona quando aplicável;
 - Spring Boot Actuator;
@@ -445,6 +521,11 @@ Decisões aprovadas:
 - GitHub Actions para CI/CD;
 - tópicos Kafka provisionados declarativamente pela infraestrutura, sem criação no startup dos microsserviços;
 - tópicos de eventos inicialmente separados por tipo, seguindo `market.<contexto>.events.<fato>.v<versão-maior>`;
+- `ChargePayment` com autorização e captura imediata em `BRL` no MVP;
+- `PaymentCaptured` como sucesso financeiro; resultado ambíguo segue para reconciliação;
+- `RefundPayment` como compensação de uma captura que não pode permanecer, sem `CancelPayment` no MVP;
+- `notification` stateless, somente de e-mail, sem banco e sem retorno para a saga;
+- MailHog como SMTP e interface local de inspeção de e-mails;
 - ausência de Spring Cloud e Spring Cloud Kubernetes;
 - segurança funcional adiada para uma fase futura.
 
@@ -453,10 +534,14 @@ Decisões aprovadas:
 As seguintes decisões serão detalhadas por especificações ou ADRs futuros:
 
 - contratos definitivos das APIs REST;
-- expansão do catálogo de comandos, eventos e tópicos Kafka além de `OrderCreated` v1;
+- schemas e provisionamento do catálogo-alvo de comandos, eventos e tópicos; hoje somente `OrderCreated` v1 existe fisicamente;
 - evolução do formato de serialização e estratégia de Schema Registry além do JSON textual atual;
 - estados completos da saga e suas compensações;
-- canal de envio de notificações;
+- provedor, métodos de pagamento e ambiente sandbox;
+- origem do valor, moeda e token seguro usado pelo `payment`;
+- detalhes do provedor para captura imediata, consulta de estado, reconciliação e reembolso, sem reabrir os contratos `ChargePayment`, `PaymentCaptured` e `RefundPayment` definidos para o MVP;
+- contratos, tópicos, retries, DLT e possíveis webhooks do `payment`;
+- requisitos de privacidade e escopo de PCI DSS para o fluxo de pagamento;
 - política de retenção da Outbox e das mensagens Kafka para ambientes compartilhados e produção;
 - estratégia de reprocessamento da DLT;
 - topologia e requisitos de alta disponibilidade para produção;
@@ -475,3 +560,9 @@ As seguintes decisões serão detalhadas por especificações ou ADRs futuros:
 | [Especificação do `order`](../order/docs/spec.md) | Comportamento funcional já implementado |
 | [Plano do `order`](../order/docs/plan.md) | Evolução concluída e próximo marco funcional |
 | [Tarefas do `order`](../order/docs/tasks.md) | Checklist verificável das entregas |
+| [Visão geral do `payment`](../payment/README.md) | Estado atual, responsabilidade e índice documental |
+| [Especificação do `payment`](../payment/docs/spec.md) | Fronteiras, saga proposta, domínio, integrações e decisões em aberto |
+| [Plano do `payment`](../payment/docs/plan.md) | Sequência incremental recomendada para implementação |
+| [Tarefas do `payment`](../payment/docs/tasks.md) | Checklist do estado atual e do backlog proposto |
+| [Arquitetura completa da compra](../full-architecture.md) | Saga, contratos, dados, falhas, compensações e plano de implementação |
+| [Microsserviço `notification`](../notification/README.md) | Responsabilidade stateless, MailHog e configuração SMTP local |

@@ -1,6 +1,6 @@
 package com.market.order.interfaces.rest;
 
-import com.market.order.domain.Order;
+import com.market.order.application.CreateOrderResult;
 import io.swagger.v3.oas.annotations.media.Schema;
 
 import java.time.Instant;
@@ -13,16 +13,16 @@ public record CreateOrderResponse(
         String orderNumber,
         @Schema(description = "Estado inicial do pedido", example = "PENDING")
         OrderResponse.Status status,
-        @Schema(description = "Instante de criação em UTC", example = "2026-08-19T23:20:16.165436398Z")
+        @Schema(description = "Instante de criação em UTC", example = "2026-08-19T23:20:16.165436Z")
         Instant createdAt
 ) {
 
-    public static CreateOrderResponse from(Order order) {
+    public static CreateOrderResponse from(CreateOrderResult result) {
         return new CreateOrderResponse(
-                order.id(),
-                order.orderNumber(),
-                OrderResponse.Status.valueOf(order.status().name()),
-                order.createdAt()
+                result.orderId(),
+                result.orderNumber(),
+                OrderResponse.Status.valueOf(result.status().name()),
+                result.createdAt()
         );
     }
 }

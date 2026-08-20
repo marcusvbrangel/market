@@ -1,6 +1,7 @@
 package com.market.order.infrastructure.persistence;
 
 import com.market.order.domain.Order;
+import com.market.order.domain.OrderItem;
 import com.market.order.domain.OrderStatus;
 import jakarta.persistence.CascadeType;
 import jakarta.persistence.Column;
@@ -82,43 +83,33 @@ class OrderJpaEntity {
         return entity;
     }
 
-    UUID getId() {
-        return id;
+    Order toDomain() {
+        var domainItems = new ArrayList<OrderItem>();
+
+        for (var item : items) {
+            var domainItem = new OrderItem(
+                    item.getId(),
+                    item.getProductId(),
+                    item.getProductName(),
+                    item.getQuantity(),
+                    item.getUnitPrice(),
+                    item.getSubtotal()
+            );
+            domainItems.add(domainItem);
+        }
+
+        return new Order(
+                id,
+                orderNumber,
+                customerId,
+                status,
+                domainItems,
+                totalAmount,
+                currency,
+                rejectionReason,
+                createdAt,
+                updatedAt
+        );
     }
 
-    String getOrderNumber() {
-        return orderNumber;
-    }
-
-    UUID getCustomerId() {
-        return customerId;
-    }
-
-    OrderStatus getStatus() {
-        return status;
-    }
-
-    List<OrderItemJpaEntity> getItems() {
-        return items;
-    }
-
-    BigDecimal getTotalAmount() {
-        return totalAmount;
-    }
-
-    String getCurrency() {
-        return currency;
-    }
-
-    String getRejectionReason() {
-        return rejectionReason;
-    }
-
-    Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    Instant getUpdatedAt() {
-        return updatedAt;
-    }
 }

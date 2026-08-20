@@ -123,11 +123,14 @@ Consumidores deverão:
 
 ## 4. Atomicidade e garantia de entrega
 
-`CreateOrderService.create()` abre uma transação PostgreSQL. Dentro dela, o adaptador persiste:
+`CreateOrderService.create()` valida e monta pedido, evento e fingerprint fora da transação. A fronteira `@Transactional` começa em `PostgresOrderCreationAdapter.createOrReplay()`. Para uma criação nova, o adaptador persiste atomicamente:
 
-1. o pedido;
-2. seus itens;
-3. o payload `OrderCreated` em `outbox_events` com status `PENDING`.
+1. o claim e o snapshot de resposta em `api_idempotency`;
+2. o pedido;
+3. seus itens;
+4. o payload `OrderCreated` em `outbox_events` com status `PENDING`.
+
+Rollback reverte os quatro efeitos e libera a chave para nova tentativa. No replay, o adaptador apenas compara o fingerprint persistido e reconstrói a resposta, sem criar outra mensagem na Outbox.
 
 O pedido não é publicado diretamente durante a requisição HTTP. O scheduler executa posteriormente o publicador, que:
 
@@ -237,13 +240,13 @@ Não havia consumidor implementado para migrar. Código, testes, infraestrutura,
 
 ## 9. Verificação automatizada
 
-A suíte completa possui 23 testes e foi executada com sucesso após o refactor.
+A suíte automatizada cobre o publicador e suas integrações relevantes. No checkpoint aprovado em 20/08/2026, a suíte completa do `order` executou 50 testes, sem falhas, erros ou testes ignorados.
 
 | Teste | Evidência fornecida |
 |---|---|
 | `TransactionalOutboxPublisherTest` | Tópico, chave, valor, `eventId`, sucesso e encaminhamento de falha para retry |
-| `OutboxKafkaIntegrationTests` | PostgreSQL e Kafka reais, publicação, consumo, payload essencial, headers principais e estado `PUBLISHED`; o broker de teste permite criação automática e não valida `kafka-init` |
-| `OrderApplicationTests` | Flyway V4, persistência do pedido e evento `PENDING` na Outbox |
+| `OutboxKafkaIntegrationTests` | PostgreSQL e Kafka reais, criação seguida de replay, exatamente uma publicação, consumo, payload essencial, headers principais e estado `PUBLISHED`; o broker de teste permite criação automática e não valida `kafka-init` |
+| `OrderApplicationTests` | Flyway V5, idempotência HTTP, rollback via `TransactionTemplate`, persistência do pedido e evento `PENDING` na Outbox |
 
 Lacunas de teste conhecidas:
 
@@ -252,7 +255,6 @@ Lacunas de teste conhecidas:
 - todos os headers não são validados em conjunto;
 - topologia e retenção do tópico não são verificadas por teste automatizado;
 - o script `kafka-init` foi validado operacionalmente, mas não possui teste automatizado;
-- não há teste de rollback que demonstre pedido, itens e Outbox revertendo juntos;
 - não há consumidor de negócio nem teste de deduplicação, DLT ou replay.
 
 ## 10. Limitações e próximos passos

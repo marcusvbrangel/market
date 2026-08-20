@@ -2,7 +2,7 @@
 
 ## 1. Estado atual
 
-O microsserviço expõe `GET /api/v1/orders/{orderId}` e `POST /api/v1/orders`. A consulta delega ao `OrderQueryService`, que usa `OrderQueryPort`; o adaptador PostgreSQL implementa a porta com Spring Data JPA. A criação delega ao `CreateOrderService`, que persiste o pedido, seus itens e um evento `OrderCreated` na Transactional Outbox dentro da mesma transação. Um publisher agendado envia o evento para `market.order.events.created.v1`, aguarda o acknowledgement e registra sucesso, reagendamento ou falha terminal. O schema, a Outbox e o pedido de demonstração são gerenciados pelo Flyway.
+O microsserviço expõe `GET /api/v1/orders/{orderId}` e `POST /api/v1/orders`. A consulta delega ao `OrderQueryService`, que usa `OrderQueryPort`; o adaptador PostgreSQL implementa a porta com Spring Data JPA. A criação exige `Idempotency-Key` e delega ao `CreateOrderService`, que valida e monta o comando fora da transação. `PostgresOrderCreationAdapter.createOrReplay` delimita a transação que grava claim, pedido, itens e um evento `OrderCreated` na Transactional Outbox. Um publisher agendado envia o evento para `market.order.events.created.v1`, aguarda o acknowledgement e registra sucesso, reagendamento ou falha terminal. O schema está na versão Flyway V5.
 
 ## 2. Direção arquitetural
 
@@ -16,6 +16,8 @@ infrastructure/    JPA, PostgreSQL, Kafka e configurações técnicas
 ```
 
 O controller não deverá conter regras de negócio nem conhecer detalhes de persistência. O Record REST não será usado como entidade de domínio ou entidade JPA.
+
+As regras gerais de implementação estão em [`docs/development-guidelines.md`](../../docs/development-guidelines.md), e as decisões do checkout estão no [ADR 0002](../../docs/adr/0002-decisoes-checkout-mvp.md).
 
 ## 3. Etapas planejadas
 
@@ -113,7 +115,7 @@ O publicador da Outbox, suas políticas de retry e a integração Kafka foram im
 
 ## 6. Aceite manual — concluído
 
-O fluxo de criação foi executado com a aplicação conectada ao PostgreSQL local. Foram validados:
+O fluxo de criação foi executado com a aplicação conectada ao PostgreSQL local antes da obrigatoriedade de `Idempotency-Key`. Naquela etapa, foram validados:
 
 - retorno `201 Created` pelo endpoint `POST /api/v1/orders`;
 - criação do pedido com status `PENDING`;
@@ -146,7 +148,9 @@ Foram implementados:
 - springdoc-openapi compatível com Spring Boot 4;
 - metadados da `Market Order API` versão `v1`;
 - documentação das operações GET e POST;
-- schemas, validações, exemplos, respostas e header `Location`;
+- schemas, validações, exemplos, respostas, `Idempotency-Key`, `Location` e `Idempotency-Replayed`;
+- resposta `409` para reutilização incompatível da chave;
+- schema documental `ApiProblemResponse`, referenciado como `$ref` pelas respostas `400` e `409` com mídia `application/problem+json`;
 - especificações JSON e YAML;
 - Swagger UI com execução interativa habilitada;
 - testes automatizados do documento e da interface;
@@ -162,6 +166,36 @@ Foi adotada a convenção de tópico por tipo de evento. O refactor alinhou:
 - binding `KafkaTopicProperties.orderCreatedEvents()`;
 - provisionador, catálogo, testes e documentação.
 
-Por se tratar de um piloto sem consumidores, não houve alias nem publicação dupla. O tópico atual foi provisionado, o tópico genérico anterior foi removido do Redpanda local e os artefatos rastreados foram regenerados. A suíte completa permaneceu verde com 23 testes.
+Por se tratar de um piloto sem consumidores, não houve alias nem publicação dupla. O tópico atual foi provisionado, o tópico genérico anterior foi removido do Redpanda local e os artefatos rastreados foram regenerados. Os 23 testes existentes naquela etapa permaneceram verdes; essa não é a contagem da suíte atual.
 
 A decisão está registrada no [ADR 0001](../../docs/adr/0001-topico-por-tipo-de-evento.md), e o contrato operacional completo está em [`kafka-outbox.md`](kafka-outbox.md).
+
+## 10. Idempotência HTTP e constraints do pedido — concluída
+
+Foram implementados:
+
+- `Idempotency-Key` obrigatório, opaco e validado com comprimento máximo de 100 caracteres;
+- escopo por `(customerId, idempotencyKey)`;
+- rejeição de `productId` repetido antes da persistência;
+- canonicalização versionada, independente da ordem dos itens;
+- `OrderCreationRequestFingerprint(version, hash)` como value object indivisível, com versão 1 e SHA-256 hexadecimal minúsculo;
+- tabela dedicada `api_idempotency`;
+- claim atômico com `INSERT ... ON CONFLICT DO NOTHING`;
+- primeira resposta e replay com `201`, mesmo `Location` e mesmo corpo;
+- header `Idempotency-Replayed` com `false` na criação e `true` no replay;
+- conflito `409` quando a mesma chave representa outro conteúdo;
+- validação e canonicalização antes de abrir a transação no adaptador PostgreSQL;
+- atomicidade entre claim, pedido, itens e `OrderCreated` na Outbox em `PostgresOrderCreationAdapter.createOrReplay`;
+- `Instant` de criação truncado para microssegundos para preservar o corpo exato no replay;
+- migration V5 com `request_hash_version=1`, moeda `BRL`, `UNIQUE (id, customer_id)`, foreign key composta de `api_idempotency` e constraints de preço e produto;
+- atualização do contrato OpenAPI;
+- vetor conhecido do fingerprint v1;
+- rollback completo exercitado com `TransactionTemplate` e reutilização posterior da chave;
+- criação seguida de replay produzindo uma única publicação Kafka;
+- testes unitários, de controller e de integração PostgreSQL/Kafka para o novo comportamento.
+
+O contrato detalhado está em [`http-idempotency.md`](http-idempotency.md). No checkpoint aprovado em 20/08/2026, a suíte completa do `order` executou 50 testes, sem falhas, erros ou testes ignorados.
+
+## 11. Próximo incremento
+
+O próximo incremento arquitetural é criar o envelope comum e evoluir a Outbox para rotear comandos e eventos. Somente depois desse roteamento o `order` poderá gravar `ReserveInventory` junto com `OrderCreated` e iniciar a saga sem enviar contratos diferentes ao tópico de criação.

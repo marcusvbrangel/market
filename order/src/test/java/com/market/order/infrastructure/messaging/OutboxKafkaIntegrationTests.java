@@ -60,40 +60,53 @@ class OutboxKafkaIntegrationTests {
     void shouldPublishOrderCreatedAndMarkOutboxAsPublished() {
         var customerId = UUID.randomUUID();
         var productId = UUID.randomUUID();
-        var order = createOrderService.create(
+        var idempotencyKey = "outbox-kafka-" + UUID.randomUUID();
+        var result = createOrderService.create(
+                idempotencyKey,
                 customerId,
                 List.of(new CreateOrderService.ItemCommand(productId, 2))
         );
+        var orderId = result.orderId();
+
+        var replayedResult = createOrderService.create(
+                idempotencyKey,
+                customerId,
+                List.of(new CreateOrderService.ItemCommand(productId, 2))
+        );
+
+        assertThat(replayedResult.replayed()).isTrue();
+        assertThat(replayedResult.orderId()).isEqualTo(orderId);
 
         publisher.publishBatch();
 
         assertThat(jdbcClient.sql("""
                         SELECT status FROM outbox_events WHERE aggregate_id = :orderId
                         """)
-                .param("orderId", order.id())
+                .param("orderId", orderId)
                 .query(String.class)
                 .single()).isEqualTo("PUBLISHED");
         assertThat(jdbcClient.sql("""
                         SELECT published_at IS NOT NULL FROM outbox_events WHERE aggregate_id = :orderId
                         """)
-                .param("orderId", order.id())
+                .param("orderId", orderId)
                 .query(Boolean.class)
                 .single()).isTrue();
 
         try (var consumer = consumer()) {
             consumer.subscribe(List.of(TOPIC));
             var records = consumer.poll(Duration.ofSeconds(10));
+            assertThat(records.records(TOPIC)).hasSize(1);
             assertThat(records).anySatisfy(record -> {
-                assertThat(record.key()).isEqualTo(order.id().toString());
+                assertThat(record.key()).isEqualTo(orderId.toString());
                 assertThat(record.value())
-                        .contains(order.id().toString(), customerId.toString(), productId.toString())
+                        .contains(orderId.toString(), customerId.toString(), productId.toString())
                         .doesNotContain("productName", "unitPrice", "subtotal");
                 assertThat(record.headers().lastHeader("eventType").value())
                         .asString().isEqualTo("OrderCreated");
                 assertThat(record.headers().lastHeader("schemaVersion").value())
                         .asString().isEqualTo("1");
                 assertThat(record.headers().lastHeader("correlationId").value())
-                        .asString().isEqualTo(order.id().toString());
+                        .asString().isEqualTo(orderId.toString());
             });
         }
     }

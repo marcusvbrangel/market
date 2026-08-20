@@ -2,6 +2,7 @@ package com.market.order.domain;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.UUID;
@@ -55,6 +56,9 @@ public record Order(
         if (currency != null && !currency.matches("[A-Z]{3}")) {
             throw new IllegalArgumentException("Currency must use a three-letter uppercase code");
         }
+        if (currency != null && !currency.equals("BRL")) {
+            throw new IllegalArgumentException("Only BRL currency is supported in the checkout MVP");
+        }
         if (rejectionReason != null && rejectionReason.length() > 500) {
             throw new IllegalArgumentException("Rejection reason must not exceed 500 characters");
         }
@@ -69,6 +73,8 @@ public record Order(
         }
 
         items = List.copyOf(items);
+        validateUniqueProducts(items);
+
         var pricedItems = items.stream().filter(OrderItem::isPriced).count();
         if (pricedItems != 0 && pricedItems != items.size()) {
             throw new IllegalArgumentException("All order items must have the same pricing state");
@@ -92,6 +98,16 @@ public record Order(
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         if (totalAmount != null && totalAmount.compareTo(expectedTotal) != 0) {
             throw new IllegalArgumentException("Total amount must equal the sum of item subtotals");
+        }
+    }
+
+    private static void validateUniqueProducts(List<OrderItem> items) {
+        var productIds = new HashSet<UUID>();
+
+        for (var item : items) {
+            if (!productIds.add(item.productId())) {
+                throw new IllegalArgumentException("Product must appear only once in an order: " + item.productId());
+            }
         }
     }
 }

@@ -1,4 +1,0 @@
--------------------------------------------------------------------------------
-Test set: com.market.notification.NotificationApplicationTests
--------------------------------------------------------------------------------
-Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 25.36 s -- in com.market.notification.NotificationApplicationTests
