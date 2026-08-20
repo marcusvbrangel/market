@@ -105,10 +105,48 @@ Legenda:
 - [x] Criar tabela `outbox_events` e seus índices.
 - [x] Criar evento `OrderCreated` sem nome ou preço de produto.
 - [x] Persistir pedido, itens e outbox na mesma transação.
-- [x] Manter a outbox em `PENDING`, sem publisher Kafka.
+- [x] Manter a outbox em `PENDING`, sem publisher Kafka, durante a entrega de persistência transacional.
 - [x] Usar Jackson 3 para serialização do payload JSONB.
 - [x] Testar domínio, service, controller, Flyway, persistência e outbox.
-- [x] Executar 18 testes sem falhas.
+- [x] Executar os 18 testes existentes naquela entrega sem falhas.
 - [x] Validar manualmente o `POST /api/v1/orders` com retorno `201 Created`.
 - [x] Confirmar manualmente no PostgreSQL a persistência do pedido e de seus itens.
 - [x] Confirmar manualmente o evento `OrderCreated` em `outbox_events` com status `PENDING`.
+
+## 8. Publicador da Outbox e Kafka
+
+- [x] Adicionar Spring Kafka ao microsserviço `order`.
+- [x] Configurar bootstrap servers por variável de ambiente.
+- [x] Configurar producer idempotente com `acks=all`.
+- [x] Definir `market.order.events.v1` em `infrastructure/kafka/topics.yaml`.
+- [x] Criar script idempotente de provisionamento do tópico.
+- [x] Integrar o provisionamento ao Docker Compose com `kafka-init`.
+- [x] Validar duas execuções consecutivas do provisionador no Redpanda local.
+- [x] Criar polling configurável da Outbox.
+- [x] Selecionar eventos com `FOR UPDATE SKIP LOCKED`.
+- [x] Publicar `OrderCreated` com `orderId` como chave Kafka.
+- [x] Publicar headers `eventId`, `eventType`, `schemaVersion`, `correlationId` e `occurredAt`.
+- [x] Marcar o evento como `PUBLISHED` somente após acknowledgement do Kafka.
+- [x] Criar retry com `attempts`, `next_attempt_at` e `last_error`.
+- [x] Encerrar tentativas excedidas com status `FAILED`.
+- [x] Criar migration Flyway V4.
+- [x] Testar sucesso e falha do publicador com JUnit, Mockito e AssertJ.
+- [x] Testar PostgreSQL e Kafka reais com Testcontainers.
+- [x] Consumir e validar `OrderCreated` no teste integrado.
+- [x] Documentar a garantia at-least-once e a idempotência obrigatória dos consumidores.
+- [x] Executar a suíte completa com 21 testes e nenhuma falha.
+
+## 9. OpenAPI e Swagger UI
+
+- [x] Adicionar springdoc-openapi compatível com Spring Boot 4.
+- [x] Configurar os metadados da API REST do `order`.
+- [x] Documentar `POST /api/v1/orders`.
+- [x] Documentar `GET /api/v1/orders/{orderId}`.
+- [x] Documentar parâmetros, request body, respostas e header `Location`.
+- [x] Adicionar descrições e exemplos aos schemas dos Java Records.
+- [x] Expor a especificação em JSON e YAML.
+- [x] Expor a Swagger UI em `/swagger-ui.html`.
+- [x] Testar paths, schemas e respostas do documento OpenAPI.
+- [x] Testar o acesso à Swagger UI.
+- [x] Criar o guia `order/docs/openapi.md`.
+- [x] Executar a suíte completa com 23 testes e nenhuma falha.

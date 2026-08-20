@@ -18,9 +18,12 @@ Esta especificação descreve somente o que já foi aprovado e implementado. A p
 - Flyway;
 - Testcontainers 2.0.5;
 - JUnit, Mockito e AssertJ;
-- Maven Wrapper.
+- Maven Wrapper;
+- springdoc-openapi 3.0.3 e Swagger UI.
 
 ## 3. Endpoint implementado
+
+A especificação OpenAPI gerada está disponível em `/v3/api-docs` e `/v3/api-docs.yaml`. A interface Swagger UI está disponível em `/swagger-ui.html`. O guia de uso está em `order/docs/openapi.md`.
 
 ### Criar pedido
 
@@ -166,9 +169,12 @@ Seus cinco itens são:
 - [x] `POST /api/v1/orders` cria um pedido `PENDING` e retorna `201 Created`.
 - [x] O contrato de criação não recebe nome nem valores de produto.
 - [x] Pedido, itens e outbox são persistidos na mesma transação.
-- [x] Nenhuma mensagem Kafka é publicada nesta etapa.
+- [x] O evento `OrderCreated` é publicado no Kafka a partir da Outbox.
+- [x] A Outbox somente é marcada como `PUBLISHED` após o acknowledgement do broker.
 - [x] O fluxo de criação foi validado manualmente com a aplicação conectada ao PostgreSQL local.
 - [x] O pedido, seus itens e o evento correspondente foram confirmados manualmente nas tabelas PostgreSQL.
+- [x] Os endpoints REST e seus Records estão documentados em OpenAPI.
+- [x] O contrato OpenAPI JSON, YAML e a Swagger UI possuem testes automatizados.
 
 ## 7. Estratégia de testes implementada
 
@@ -178,8 +184,10 @@ Seus cinco itens são:
 | `OrderQueryServiceTest` | Delegação à porta e resultado presente ou ausente |
 | `OrderControllerTest` | Contrato JSON, `200`, `404` e UUID inválido com `400` |
 | `OrderApplicationTests` | PostgreSQL real, Flyway, JPA, adaptador e pedido persistido |
+| `TransactionalOutboxPublisherTest` | Chave, tópico, headers, sucesso e retry do publicador |
+| `OutboxKafkaIntegrationTests` | PostgreSQL, Flyway, Kafka real, consumo do evento e status `PUBLISHED` |
 
-O teste integrado usa PostgreSQL `17.10-alpine` em container temporário. Ele confirma a versão 3 do Flyway, consulta o pedido de referência, cria um pedido sem precificação, valida sua persistência e confirma um evento correspondente na outbox. A suíte possui 18 testes.
+Os testes integrados usam PostgreSQL `17.10-alpine` e Kafka em containers temporários. Eles confirmam a versão 4 do Flyway, consultam o pedido de referência, criam um pedido sem precificação, validam sua persistência, publicam e consomem `OrderCreated` e confirmam a Outbox como `PUBLISHED`. Após a inclusão dos testes OpenAPI, a suíte possui 23 testes.
 
 ## 8. Transactional Outbox
 
@@ -195,7 +203,11 @@ A migration `V3__support_order_creation_and_outbox.sql` criou `outbox_events`. A
 
 O payload contém somente `orderId`, `customerId`, `productId`, `quantity` e metadados do evento. Nome e valores dos produtos não fazem parte do comando de criação nem do evento atual.
 
-Não existe publisher Kafka nesta entrega. Os registros permanecem em `PENDING` até a implementação explícita do publicador da outbox.
+O publicador consulta registros `PENDING` elegíveis periodicamente usando `FOR UPDATE SKIP LOCKED`. Cada evento é enviado para `market.order.events.v1` com `orderId` como chave e os headers `eventId`, `eventType`, `schemaVersion`, `correlationId` e `occurredAt`.
+
+Após o acknowledgement do Kafka, o registro muda para `PUBLISHED` e recebe `published_at`. Uma falha incrementa `attempts`, registra `last_error` e agenda `next_attempt_at`; ao atingir o limite configurado, o registro muda para `FAILED`.
+
+A entrega é at-least-once. Consumidores deverão deduplicar eventos por `eventId`.
 
 ## 9. Aceite manual
 
@@ -207,12 +219,11 @@ Após a requisição, foram confirmados diretamente no PostgreSQL:
 - seus itens na tabela `order_items`;
 - o evento `OrderCreated` na tabela `outbox_events`, com status `PENDING`.
 
-Essa validação confirma a persistência do pedido e da Outbox. A publicação no Kafka permanece propositalmente desabilitada nesta etapa.
+Essa validação confirmou a persistência do pedido e da Outbox antes da inclusão do publicador. A publicação Kafka foi validada posteriormente por teste automatizado integrado com broker real.
 
 ## 10. Fora do escopo desta entrega
 
 - alteração de pedidos persistidos após a criação inicial;
-- publicação da outbox no Kafka;
 - enriquecimento de produto e precificação;
 - consumo de mensagens Kafka;
 - saga de compra;

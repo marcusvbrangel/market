@@ -7,6 +7,13 @@
 /home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/domain/Order.java
 /home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/domain/OrderItem.java
 /home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/domain/OrderStatus.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/messaging/KafkaTopicProperties.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/messaging/OutboxEvent.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/messaging/OutboxEventRepository.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/messaging/OutboxPublisherProperties.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/messaging/OutboxPublishingConfiguration.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/messaging/TransactionalOutboxPublisher.java
+/home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/openapi/OpenApiConfiguration.java
 /home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/persistence/OrderItemJpaEntity.java
 /home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/persistence/OrderJpaEntity.java
 /home/wolf/Documentos/desenvolvimento/market/order/src/main/java/com/market/order/infrastructure/persistence/PostgresOrderCreationAdapter.java

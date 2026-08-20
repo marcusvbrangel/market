@@ -7,7 +7,9 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
+import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.jdbc.core.simple.JdbcClient;
+import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -19,8 +21,14 @@ import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
+@SpringBootTest(properties = "market.outbox.publisher.enabled=false")
+@AutoConfigureMockMvc
 @Testcontainers
 class OrderApplicationTests {
 
@@ -50,6 +58,9 @@ class OrderApplicationTests {
 	@Autowired
 	private ObjectMapper objectMapper;
 
+	@Autowired
+	private MockMvc mockMvc;
+
 	@Test
 	void shouldApplyMigrationsAndLoadPersistedOrder() {
 		var order = service.findById(SAMPLE_ORDER_ID);
@@ -59,7 +70,7 @@ class OrderApplicationTests {
 			assertThat(found.items()).hasSize(5);
 			assertThat(found.totalAmount()).isEqualByComparingTo(new BigDecimal("6549.40"));
 		});
-		assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("3");
+		assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("4");
 		assertThat(jdbcClient.sql("SELECT count(*) FROM orders WHERE id = :id")
 				.param("id", SAMPLE_ORDER_ID)
 				.query(Long.class)
@@ -126,6 +137,32 @@ class OrderApplicationTests {
 				}
 				""", com.market.order.interfaces.rest.CreateOrderRequest.class))
 				.isInstanceOf(tools.jackson.databind.exc.UnrecognizedPropertyException.class);
+	}
+
+	@Test
+	void shouldExposeOpenApiContractInJsonAndYaml() throws Exception {
+		mockMvc.perform(get("/v3/api-docs"))
+				.andExpect(status().isOk())
+				.andExpect(content().contentTypeCompatibleWith("application/json"))
+				.andExpect(jsonPath("$.openapi").value(org.hamcrest.Matchers.startsWith("3.")))
+				.andExpect(jsonPath("$.info.title").value("Market Order API"))
+				.andExpect(jsonPath("$.info.version").value("v1"))
+				.andExpect(jsonPath("$.paths['/api/v1/orders'].post.responses['201']").exists())
+				.andExpect(jsonPath("$.paths['/api/v1/orders/{orderId}'].get.responses['200']").exists())
+				.andExpect(jsonPath("$.components.schemas.CreateOrderRequest").exists())
+				.andExpect(jsonPath("$.components.schemas.OrderResponse").exists());
+
+		mockMvc.perform(get("/v3/api-docs.yaml"))
+				.andExpect(status().isOk())
+				.andExpect(content().string(org.hamcrest.Matchers.containsString("title: Market Order API")))
+				.andExpect(content().string(org.hamcrest.Matchers.containsString("/api/v1/orders:")));
+	}
+
+	@Test
+	void shouldExposeSwaggerUi() throws Exception {
+		mockMvc.perform(get("/swagger-ui.html"))
+				.andExpect(status().is3xxRedirection())
+				.andExpect(header().string("Location", "/swagger-ui/index.html"));
 	}
 
 }

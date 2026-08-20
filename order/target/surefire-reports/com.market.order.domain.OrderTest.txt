@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: com.market.order.domain.OrderTest
 -------------------------------------------------------------------------------
-Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.275 s -- in com.market.order.domain.OrderTest
+Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.300 s -- in com.market.order.domain.OrderTest

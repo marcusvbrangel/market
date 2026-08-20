@@ -72,7 +72,7 @@ As APIs REST serão expostas somente onde houver interação externa:
 - **order**: criação e consulta de pedidos e demais operações do ciclo de vida da compra;
 - **inventory**: consulta de produtos e de disponibilidade que possa ser apresentada ao cliente.
 
-As APIs usarão JSON sobre HTTP, validação de entrada e códigos HTTP semanticamente adequados. Contratos REST deverão ser documentados com OpenAPI.
+As APIs usarão JSON sobre HTTP, validação de entrada e códigos HTTP semanticamente adequados. No `order`, os contratos REST estão documentados com springdoc-openapi e disponíveis em JSON, YAML e Swagger UI. Os demais microsserviços deverão adotar a mesma abordagem quando suas APIs forem implementadas.
 
 A consulta externa de disponibilidade não representa uma reserva. A disponibilidade definitiva será validada pelo `inventory` durante a saga, evitando que uma consulta anterior seja tratada como garantia de estoque.
 
@@ -88,6 +88,20 @@ Consequências dessa decisão:
 - consumidores deverão ser idempotentes;
 - falhas serão tratadas com retries controlados e Dead Letter Topics (DLT);
 - a chave de particionamento deverá preservar a ordem dos eventos de uma mesma compra, preferencialmente usando `orderId`.
+
+### 3.3 Provisionamento dos tópicos Kafka
+
+Os tópicos são infraestrutura declarativa e versionada no monorepo em `infrastructure/kafka`. Os microsserviços são proprietários funcionais de seus contratos, mas não criam tópicos durante o startup e não precisam de permissões administrativas no broker.
+
+No ambiente local, o serviço `kafka-init` do Docker Compose executa um script idempotente depois que o Redpanda fica saudável. No Kubernetes, o mesmo princípio será implementado com manifests YAML e um `Job` idempotente, sem Spring Cloud, Helm ou Kustomize nesta fase.
+
+O tópico inicialmente aprovado é:
+
+| Tópico | Proprietário | Chave | Partições locais | Retenção local |
+|---|---|---|---:|---:|
+| `market.order.events.v1` | `order` | `orderId` | 3 | 7 dias |
+
+O fator de replicação local é `1` por existir apenas um broker. Ambientes produtivos com três ou mais brokers deverão usar fator de replicação mínimo `3`. A criação automática de tópicos pelas aplicações não será usada.
 
 ## 4. Responsabilidades dos microsserviços
 
@@ -197,6 +211,10 @@ Na mesma transação PostgreSQL, o serviço deverá:
 Essa abordagem evita a gravação no banco sem a correspondente intenção durável de publicação. Ela não produz processamento exatamente uma vez em todo o sistema; por isso, os consumidores continuarão obrigatoriamente idempotentes.
 
 A implementação inicial poderá usar um publicador próprio com polling e locking no PostgreSQL. A adoção futura de Change Data Capture, como Debezium, exigirá decisão arquitetural específica.
+
+No `order`, o publicador inicial consulta lotes elegíveis com `FOR UPDATE SKIP LOCKED`, publica `OrderCreated` em `market.order.events.v1` e aguarda o acknowledgement do Kafka antes de marcar o registro como `PUBLISHED`. Falhas são reagendadas até o limite configurado; após o limite, o registro fica em `FAILED` para tratamento operacional.
+
+A garantia é **at-least-once**. Se o Kafka confirmar a mensagem e a atualização posterior no PostgreSQL falhar, o evento poderá ser publicado novamente. Todo consumidor deverá deduplicar pelo `eventId`.
 
 ### 6.1 Envelope das mensagens
 
@@ -353,6 +371,8 @@ Cada microsserviço terá sua própria imagem Docker. As imagens deverão:
 
 O Docker Compose poderá ser usado como conveniência de desenvolvimento, mas os manifests Kubernetes serão a referência do ambiente integrado inicial.
 
+No ambiente Docker Compose local, o Redpanda Console v3.10.0 está instalado, configurado e validado em `http://localhost:8088` para inspeção operacional dos tópicos, partições, configurações e mensagens. Ele está integrado ao broker, Schema Registry e Admin API pela rede `market_net`. Seu guia de uso está em `infrastructure/kafka/redpanda-console.md`. Esse painel é uma ferramenta de desenvolvimento e não representa exposição pública aprovada para ambientes produtivos.
+
 ## 13. Testes automatizados
 
 A estratégia de testes incluirá:
@@ -417,6 +437,7 @@ Decisões aprovadas:
 - manifests Kubernetes em YAML puro inicialmente;
 - monorepo com serviços implantáveis independentemente;
 - GitHub Actions para CI/CD;
+- tópicos Kafka provisionados declarativamente pela infraestrutura, sem criação no startup dos microsserviços;
 - ausência de Spring Cloud e Spring Cloud Kubernetes;
 - segurança funcional adiada para uma fase futura.
 

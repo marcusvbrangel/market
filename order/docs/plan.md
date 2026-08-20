@@ -93,7 +93,7 @@ Foram implementados testes unitários de domínio e service, testes isolados do 
 - detalhes das entidades de persistência e dos índices;
 - dados iniciais para desenvolvimento e testes.
 
-Publicação Kafka e avanço da saga não fazem parte deste plano imediato. Eles terão especificação e tarefas próprias após a persistência transacional da outbox.
+Na etapa descrita acima, a publicação Kafka e o avanço da saga ainda não faziam parte do plano imediato. A publicação foi concluída posteriormente na etapa 7; o avanço da saga continua pendente de especificação própria.
 
 ## 5. Criação de pedido e outbox — concluída
 
@@ -109,7 +109,7 @@ Foram implementados:
 - serialização do evento com Jackson 3;
 - testes unitários, de controller e de integração com Testcontainers.
 
-O próximo plano deverá tratar do publicador da outbox, políticas de retry e integração Kafka, sem misturar publicação com a transação de criação.
+O publicador da Outbox, suas políticas de retry e a integração Kafka foram implementados sem misturar a publicação com a transação de criação.
 
 ## 6. Aceite manual — concluído
 
@@ -120,3 +120,34 @@ O fluxo de criação foi executado com a aplicação conectada ao PostgreSQL loc
 - persistência do pedido e de seus itens;
 - persistência do evento `OrderCreated` em `outbox_events` com status `PENDING`;
 - ausência de publicação Kafka, conforme o escopo aprovado para esta etapa.
+
+## 7. Publicação da Outbox no Kafka — concluída
+
+Foram implementados:
+
+- tópico declarativo `market.order.events.v1` na infraestrutura compartilhada;
+- serviço `kafka-init` idempotente no Docker Compose;
+- Spring Kafka com producer idempotente e acknowledgement `all`;
+- polling agendado da Outbox com lotes configuráveis;
+- locking PostgreSQL com `FOR UPDATE SKIP LOCKED` para múltiplas instâncias;
+- publicação de `OrderCreated` usando `orderId` como chave;
+- headers de identificação, versão, correlação e ocorrência;
+- transição para `PUBLISHED` somente após confirmação do Kafka;
+- retry com reagendamento, limite de tentativas e estado terminal `FAILED`;
+- migration Flyway V4 para metadados de retry;
+- testes unitários e integração real com PostgreSQL e Kafka via Testcontainers.
+
+A garantia é at-least-once e os futuros consumidores deverão deduplicar pelo `eventId`. O próximo plano funcional deverá especificar o consumo pelo `inventory` e o início da Saga orquestrada.
+
+## 8. Documentação OpenAPI — concluída
+
+Foram implementados:
+
+- springdoc-openapi compatível com Spring Boot 4;
+- metadados da `Market Order API` versão `v1`;
+- documentação das operações GET e POST;
+- schemas, validações, exemplos, respostas e header `Location`;
+- especificações JSON e YAML;
+- Swagger UI com execução interativa habilitada;
+- testes automatizados do documento e da interface;
+- guia operacional em `order/docs/openapi.md`.

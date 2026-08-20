@@ -10,6 +10,13 @@ spring:
     password: ${ORDER_DB_PASSWORD:1234}
   flyway:
     enabled: true
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:19092}
+    producer:
+      acks: all
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 5
   jpa:
     open-in-view: false
     hibernate:
@@ -18,3 +25,26 @@ spring:
       hibernate:
         jdbc:
           time_zone: UTC
+
+market:
+  kafka:
+    topics:
+      order-events: ${ORDER_EVENTS_TOPIC:market.order.events.v1}
+  outbox:
+    publisher:
+      enabled: ${OUTBOX_PUBLISHER_ENABLED:true}
+      fixed-delay: ${OUTBOX_PUBLISHER_FIXED_DELAY:1000}
+      batch-size: ${OUTBOX_PUBLISHER_BATCH_SIZE:50}
+      max-attempts: ${OUTBOX_PUBLISHER_MAX_ATTEMPTS:5}
+      retry-delay: ${OUTBOX_PUBLISHER_RETRY_DELAY:5s}
+      send-timeout: ${OUTBOX_PUBLISHER_SEND_TIMEOUT:10s}
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    display-request-duration: true
+    operations-sorter: method
+    tags-sorter: alpha
+    try-it-out-enabled: true
