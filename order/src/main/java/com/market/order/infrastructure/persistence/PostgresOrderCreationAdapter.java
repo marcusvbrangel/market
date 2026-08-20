@@ -8,11 +8,10 @@ import com.market.order.application.OrderCreationRequestFingerprint;
 import com.market.order.application.port.OrderCreationPort;
 import com.market.order.domain.Order;
 import com.market.order.domain.OrderStatus;
+import com.market.order.infrastructure.messaging.OrderCreatedOutboxWriter;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
-import tools.jackson.core.JacksonException;
-import tools.jackson.databind.ObjectMapper;
 
 import java.time.Instant;
 import java.time.OffsetDateTime;
@@ -24,16 +23,16 @@ class PostgresOrderCreationAdapter implements OrderCreationPort {
 
     private final SpringDataOrderRepository repository;
     private final JdbcClient jdbcClient;
-    private final ObjectMapper objectMapper;
+    private final OrderCreatedOutboxWriter outboxWriter;
 
     PostgresOrderCreationAdapter(
             SpringDataOrderRepository repository,
             JdbcClient jdbcClient,
-            ObjectMapper objectMapper
+            OrderCreatedOutboxWriter outboxWriter
     ) {
         this.repository = repository;
         this.jdbcClient = jdbcClient;
-        this.objectMapper = objectMapper;
+        this.outboxWriter = outboxWriter;
     }
 
     @Override
@@ -52,7 +51,7 @@ class PostgresOrderCreationAdapter implements OrderCreationPort {
 
         var entity = OrderJpaEntity.fromDomain(order);
         repository.saveAndFlush(entity);
-        insertOutbox(event);
+        outboxWriter.append(event);
         return CreateOrderResult.created(order);
     }
 
@@ -141,31 +140,6 @@ class PostgresOrderCreationAdapter implements OrderCreationPort {
                         resultSet.getObject("response_created_at", OffsetDateTime.class).toInstant()
                 ))
                 .single();
-    }
-
-    private void insertOutbox(OrderCreatedEvent event) {
-        jdbcClient.sql("""
-                        INSERT INTO outbox_events (
-                            id, aggregate_id, aggregate_type, event_type,
-                            payload, status, attempts, occurred_at, created_at
-                        ) VALUES (
-                            :id, :aggregateId, 'ORDER', 'OrderCreated',
-                            CAST(:payload AS jsonb), 'PENDING', 0, :occurredAt, :occurredAt
-                        )
-                        """)
-                .param("id", event.eventId())
-                .param("aggregateId", event.orderId())
-                .param("payload", serialize(event))
-                .param("occurredAt", event.occurredAt().atOffset(ZoneOffset.UTC))
-                .update();
-    }
-
-    private String serialize(OrderCreatedEvent event) {
-        try {
-            return objectMapper.writeValueAsString(event);
-        } catch (JacksonException exception) {
-            throw new IllegalStateException("Could not serialize OrderCreated outbox event", exception);
-        }
     }
 
     private record IdempotencyRecord(

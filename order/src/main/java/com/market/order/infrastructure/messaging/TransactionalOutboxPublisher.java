@@ -7,10 +7,9 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.nio.charset.StandardCharsets;
-import java.time.Instant;
+import java.util.concurrent.TimeUnit;
 
 @Component
 @ConditionalOnProperty(prefix = "market.outbox.publisher", name = "enabled", havingValue = "true", matchIfMissing = true)
@@ -18,57 +17,96 @@ class TransactionalOutboxPublisher {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(TransactionalOutboxPublisher.class);
 
-    private final OutboxEventRepository repository;
+    private final OutboxMessageRepository repository;
     private final KafkaTemplate<String, String> kafkaTemplate;
-    private final KafkaTopicProperties topics;
     private final OutboxPublisherProperties properties;
 
     TransactionalOutboxPublisher(
-            OutboxEventRepository repository,
+            OutboxMessageRepository repository,
             KafkaTemplate<String, String> kafkaTemplate,
-            KafkaTopicProperties topics,
             OutboxPublisherProperties properties
     ) {
         this.repository = repository;
         this.kafkaTemplate = kafkaTemplate;
-        this.topics = topics;
         this.properties = properties;
     }
 
     @Scheduled(fixedDelayString = "${market.outbox.publisher.fixed-delay:1000}")
-    @Transactional
     public void publishBatch() {
-        repository.lockPublishable(properties.batchSize()).forEach(this::publish);
+        for (var processed = 0; processed < properties.batchSize(); processed++) {
+            var claimedMessage = repository.claimNext(
+                    properties.maxAttempts(),
+                    properties.leaseDuration()
+            );
+
+            if (claimedMessage.isEmpty()) {
+                return;
+            }
+
+            var shouldContinue = publish(claimedMessage.orElseThrow());
+
+            if (!shouldContinue) {
+                return;
+            }
+        }
     }
 
-    private void publish(OutboxEvent event) {
+    private boolean publish(ClaimedOutboxMessage claimedMessage) {
+        var message = claimedMessage.message();
+
         try {
             var record = new ProducerRecord<>(
-                    topics.orderCreatedEvents(),
-                    event.aggregateId().toString(),
-                    event.payload()
+                    message.destinationTopic(),
+                    message.partitionKey(),
+                    message.payload()
             );
-            record.headers()
-                    .add("eventId", event.id().toString().getBytes(StandardCharsets.UTF_8))
-                    .add("eventType", event.eventType().getBytes(StandardCharsets.UTF_8))
-                    .add("schemaVersion", "1".getBytes(StandardCharsets.UTF_8))
-                    .add("correlationId", event.aggregateId().toString().getBytes(StandardCharsets.UTF_8))
-                    .add("occurredAt", event.occurredAt().toString().getBytes(StandardCharsets.UTF_8));
 
-            kafkaTemplate.send(record).get(properties.sendTimeout().toMillis(), java.util.concurrent.TimeUnit.MILLISECONDS);
-            repository.markPublished(event.id(), Instant.now());
-            LOGGER.info("Published outbox event id={} type={} aggregateId={}",
-                    event.id(), event.eventType(), event.aggregateId());
+            for (var header : message.headers().entrySet()) {
+                record.headers().add(
+                        header.getKey(),
+                        header.getValue().getBytes(StandardCharsets.UTF_8)
+                );
+            }
+
+            kafkaTemplate.send(record).get(properties.sendTimeout().toMillis(), TimeUnit.MILLISECONDS);
+            var markedAsPublished = repository.markPublished(claimedMessage);
+
+            if (!markedAsPublished) {
+                LOGGER.warn("Lost outbox lease after publishing message id={}", message.messageId());
+                return true;
+            }
+
+            LOGGER.info(
+                    "Published outbox message id={} type={} destination={} aggregateId={}",
+                    message.messageId(),
+                    message.contract().messageType(),
+                    message.destinationTopic(),
+                    message.aggregateId()
+            );
+            return true;
         } catch (Exception exception) {
             if (exception instanceof InterruptedException) {
                 Thread.currentThread().interrupt();
             }
-            repository.markFailed(
-                    event.id(), event.attempts(), properties.maxAttempts(),
-                    properties.retryDelay(), rootMessage(exception)
+
+            var failureRecorded = repository.markFailed(
+                    claimedMessage,
+                    properties.maxAttempts(),
+                    properties.retryDelay(),
+                    rootMessage(exception)
             );
-            LOGGER.warn("Failed to publish outbox event id={} attempt={}",
-                    event.id(), event.attempts() + 1, exception);
+
+            if (!failureRecorded) {
+                LOGGER.warn("Lost outbox lease after publishing failure message id={}", message.messageId());
+            }
+
+            LOGGER.warn(
+                    "Failed to publish outbox message id={} attempt={}",
+                    message.messageId(),
+                    claimedMessage.attempt(),
+                    exception
+            );
+            return !(exception instanceof InterruptedException);
         }
     }
 

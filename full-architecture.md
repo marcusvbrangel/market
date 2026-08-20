@@ -25,7 +25,7 @@ Hoje o projeto possui criação de pedido, não um checkout completo:
 - `payment` ainda é um bootstrap sem domínio ou integração, embora sua infraestrutura de banco já esteja provisionada;
 - `notification` já possui starter/configuração SMTP e MailHog local, mas ainda não implementa listener Kafka, template nem envio de e-mail de negócio;
 - apenas `market.order.events.created.v1` está catalogado em [`topics.yaml`](infrastructure/kafka/topics.yaml);
-- o publisher atual envia qualquer registro da Outbox para esse único tópico, independentemente do tipo, em [`TransactionalOutboxPublisher.java`](order/src/main/java/com/market/order/infrastructure/messaging/TransactionalOutboxPublisher.java);
+- a Outbox V6 resolve a rota por `MessageContract`, persiste tópico, chave, headers e payload finais e os publica sem inferir o destino pelo tipo em [`TransactionalOutboxPublisher.java`](order/src/main/java/com/market/order/infrastructure/messaging/TransactionalOutboxPublisher.java);
 - `payment_db` e `payment_user` já são criados por [`01-create-databases.sql`](docker/postgres/init/01-create-databases.sql) e foram provisionados no PostgreSQL local; o microsserviço `payment` ainda não possui datasource, JPA, Flyway nem migrations próprias;
 - o total do pedido atualmente comporta somente a soma dos itens. Frete, desconto e imposto ainda não cabem no modelo de [`Order.java`](order/src/main/java/com/market/order/domain/Order.java).
 
@@ -414,6 +414,8 @@ Recusa de estoque ou pagamento é resultado de negócio e não deve ir para DLT.
 
 ## 10. Envelope dos novos contratos
 
+A fundação deste envelope já está implementada no `order` por `MessageEnvelope` e `MessageContract`. Ela ainda não materializa nem publica um comando da saga: a única rota de negócio registrada continua sendo `OrderCreated` v1, preservado deliberadamente em seu formato legado.
+
 ```json
 {
   "messageId": "uuid",
@@ -432,7 +434,9 @@ Regras:
 
 - `messageId` identifica a entrega;
 - `operationId` no payload identifica o efeito de negócio;
+- retry ou redelivery da mesma intenção preserva `messageId`; uma nova mensagem para a mesma operação poderá usar outro `messageId`, mas deverá conservar `operationId`;
 - redelivery conserva o mesmo `operationId`;
+- `causationId` pode ser nulo em uma mensagem raiz;
 - quando houver resposta, ela usa como `causationId` o comando processado; `NotifyOrderMilestone` não gera resposta;
 - `orderId` é a chave Kafka;
 - `traceparent` pode ficar em header;
@@ -468,7 +472,7 @@ O `notification` é a exceção deliberada: não possui Inbox. Ele confirma o of
 
 ### 11.2 Outbox comum aos produtores
 
-Evoluir a Outbox para persistir:
+No `order`, a migration V6 renomeou a tabela para `outbox_messages` e implementou a estrutura comum. `inventory` e `payment` deverão adotar o mesmo contrato quando passarem a produzir mensagens. A Outbox persiste:
 
 - `message_id`;
 - aggregate ID e tipo;
@@ -476,10 +480,14 @@ Evoluir a Outbox para persistir:
 - categoria `COMMAND` ou `EVENT`;
 - tópico de destino e chave Kafka;
 - correlação e causa;
-- payload e headers;
+- payload final como `TEXT` validado como objeto JSON e headers textuais como objeto `JSONB`;
 - status, tentativas, disponibilidade, lease e timestamps.
 
-O publisher pode reivindicar um lote em uma transação curta, enviar fora dela e atualizar o resultado posteriormente. Continuará existindo uma janela de duplicação se o Kafka confirmar e a atualização do banco falhar.
+O publisher processa sequencialmente até o limite do lote. Cada mensagem é reivindicada individualmente em uma transação curta, passa para `PROCESSING` com um `lease_id` e é enviada fora da transação PostgreSQL. Sucesso ou falha somente pode ser gravado pelo proprietário da lease. Elegibilidade, lease, reagendamento e publicação usam o relógio do PostgreSQL.
+
+No fluxo atual de criação, o writer da Outbox exige propagação transacional `MANDATORY`, portanto a mensagem somente pode ser inserida dentro da transação que grava o pedido. `created_at`, elegibilidade, retry, lease e publicação usam `CURRENT_TIMESTAMP` do PostgreSQL; `occurred_at` continua representando o instante de negócio da mensagem.
+
+`attempts` é incrementado no claim. Uma lease expirada pode ser recuperada enquanto houver orçamento; se a última lease permitida expirar, a mensagem passa para `FAILED` sem novo claim. Continuará existindo uma janela de duplicação se o Kafka confirmar e a atualização do banco falhar.
 
 Transactional Outbox elimina o dual write, mas ainda pode produzir duplicatas. Consumidores idempotentes permanecem obrigatórios. Consulte [AWS Transactional Outbox](https://docs.aws.amazon.com/prescriptive-guidance/latest/cloud-design-patterns/transactional-outbox.html).
 
@@ -539,7 +547,7 @@ Responsabilidade única não significa um microsserviço para cada substantivo. 
 
 1. **Decisões consolidadas; implementação funcional da saga ainda pendente:** aplicar o [ADR 0002](docs/adr/0002-decisoes-checkout-mvp.md): captura imediata, BRL, estoque único, preço temporariamente no `inventory`, TTL, estados, produtos repetidos e idempotência HTTP.
 2. **Concluído no `order`:** corrigir constraints, rejeitar produtos repetidos e implementar a idempotência HTTP definida no ADR. O aceite inclui vetor conhecido do fingerprint v1, rollback completo via `TransactionTemplate` e criação seguida de replay com uma única publicação Kafka.
-3. Criar o envelope comum e evoluir a Outbox para rotear comandos e eventos.
+3. **Concluído no `order`:** criar o envelope comum, preservar `OrderCreated` v1 e evoluir a Outbox V6 para rotear comandos e eventos com claim curto e lease recuperável. Em 20/08/2026, `./mvnw clean test` executou 73 testes sem falhas, erros ou testes ignorados; o upgrade local V5→V6 preservou duas linhas `PUBLISHED` com rota canônica e headers completos.
 4. Adicionar Inbox, saga persistente e histórico no `order`.
 5. Implementar `inventory` com produto/preço, reserva tudo ou nada, expiração, release e commit.
 6. Fazer o `order` consumir resultados e avançar a saga transacionalmente.
@@ -598,5 +606,6 @@ Essa arquitetura segue a característica essencial da saga orquestrada: o `order
 
 - [ADR 0001 — Tópico Kafka por tipo de evento](docs/adr/0001-topico-por-tipo-de-evento.md)
 - [ADR 0002 — Decisões do checkout MVP](docs/adr/0002-decisoes-checkout-mvp.md)
+- [ADR 0003 — Envelope, roteamento e lease da Outbox](docs/adr/0003-envelope-roteamento-e-lease-da-outbox.md)
 - [Diretrizes de desenvolvimento](docs/development-guidelines.md)
 - [Arquitetura geral](docs/architecture.md)

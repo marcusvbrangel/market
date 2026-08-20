@@ -36,7 +36,7 @@ Regras da convenção:
 - `events` diferencia fatos publicados de futuros comandos;
 - `created` representa o fato no passado e em minúsculas;
 - `v1` é a versão maior do contrato, não a versão da aplicação, do Kafka ou da infraestrutura;
-- o tópico é destinado exclusivamente a `OrderCreated` enquanto estiver em `v1`; no publicador atual, essa exclusividade é uma precondição e ainda não é validada por roteamento técnico;
+- o tópico é destinado exclusivamente a `OrderCreated` enquanto estiver em `v1`; antes da Outbox V6 essa exclusividade era apenas uma precondição, e agora a rota é resolvida por contrato e persistida antes da publicação;
 - a chave é `orderId`, preservando a afinidade e a ordem dos eventos do mesmo pedido enquanto o número de partições e a estratégia de particionamento forem mantidos;
 - alterações incompatíveis de contrato exigem um novo tópico de versão maior;
 - alterações compatíveis e aditivas podem permanecer na mesma versão desde que os consumidores tolerem campos desconhecidos.
@@ -70,7 +70,8 @@ Custos e restrições:
 - o número de tópicos crescerá com o catálogo de eventos;
 - cada novo evento exigirá definição de infraestrutura, configuração, observabilidade e testes próprios;
 - uma jornada que dependa de vários tipos deverá correlacioná-los por `orderId` e metadados;
-- o publicador atual não roteia por `eventType`; portanto, somente `OrderCreated` pode entrar no conjunto de registros publicáveis até que exista roteamento explícito.
+- somente contratos registrados explicitamente podem criar uma intenção de publicação; não existe tópico default nem fallback para contratos desconhecidos;
+- a Outbox V6 persiste o tópico, a chave, os headers e o payload finais, permitindo que o mesmo publisher transporte tipos diferentes sem inferir a rota pelo `eventType`.
 
 ## Evolução e rollback
 
@@ -81,6 +82,7 @@ Um rollback local exige recriar o tópico desejado e reconfigurar produtor e con
 ## Referências
 
 - [Arquitetura geral](../architecture.md)
+- [ADR 0003 — Envelope, roteamento e lease da Outbox](0003-envelope-roteamento-e-lease-da-outbox.md)
 - [Contrato Kafka e Transactional Outbox](../../order/docs/kafka-outbox.md)
 - [Infraestrutura Kafka](../../infrastructure/kafka/README.md)
 - [Catálogo declarativo de tópicos](../../infrastructure/kafka/topics.yaml)

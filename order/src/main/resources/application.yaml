@@ -17,6 +17,11 @@ spring:
       properties:
         enable.idempotence: true
         max.in.flight.requests.per.connection: 5
+        max.block.ms: ${KAFKA_PRODUCER_MAX_BLOCK_MS:5000}
+  task:
+    scheduling:
+      pool:
+        size: 1
   jpa:
     open-in-view: false
     hibernate:
@@ -38,6 +43,8 @@ market:
       max-attempts: ${OUTBOX_PUBLISHER_MAX_ATTEMPTS:5}
       retry-delay: ${OUTBOX_PUBLISHER_RETRY_DELAY:5s}
       send-timeout: ${OUTBOX_PUBLISHER_SEND_TIMEOUT:10s}
+      lease-duration: ${OUTBOX_PUBLISHER_LEASE_DURATION:30s}
+      kafka-max-block-milliseconds: ${KAFKA_PRODUCER_MAX_BLOCK_MS:5000}
 
 springdoc:
   api-docs:

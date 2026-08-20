@@ -285,15 +285,15 @@ Na mesma transação PostgreSQL, o serviço deverá:
 
 Essa abordagem evita a gravação no banco sem a correspondente intenção durável de publicação. Ela não produz processamento exatamente uma vez em todo o sistema; por isso, os consumidores continuarão obrigatoriamente idempotentes.
 
-A implementação inicial poderá usar um publicador próprio com polling e locking no PostgreSQL. A adoção futura de Change Data Capture, como Debezium, exigirá decisão arquitetural específica.
+A implementação atual usa um publicador próprio com polling, claim transacional e lease no PostgreSQL. A adoção futura de Change Data Capture, como Debezium, exigirá decisão arquitetural específica.
 
-No `order`, o publicador inicial consulta lotes elegíveis com `FOR UPDATE SKIP LOCKED`, publica `OrderCreated` em `market.order.events.created.v1` e aguarda o acknowledgement do Kafka antes de marcar o registro como `PUBLISHED`. Falhas são reagendadas até o limite configurado; após o limite, o registro fica em `FAILED` para tratamento operacional.
+No `order`, cada mensagem é selecionada individualmente com `FOR UPDATE SKIP LOCKED` em uma transação curta. O claim muda a linha para `PROCESSING`, incrementa `attempts` e atribui `lease_id` e `lease_until`. O publisher confirma essa transação, envia sequencialmente ao tópico e à chave persistidos, aguarda o acknowledgement e grava o resultado somente se ainda possuir a mesma lease. Falhas conhecidas são reagendadas até o limite; leases expiradas são recuperáveis enquanto houver tentativas.
 
-A garantia é **at-least-once**. Se o Kafka confirmar a mensagem e a atualização posterior no PostgreSQL falhar, o evento poderá ser publicado novamente. Todo consumidor deverá deduplicar pelo `eventId`.
+A garantia é **at-least-once**. Se o Kafka confirmar a mensagem e a atualização posterior no PostgreSQL falhar, ela poderá ser publicada novamente. Contratos novos deverão ser deduplicados por `messageId`; o legado `OrderCreated` v1 continua usando `eventId`.
 
-### 6.1 Envelope alvo e contrato atual
+### 6.1 Envelope comum e contrato legado
 
-Como convenção alvo para o catálogo futuro, comandos e eventos deverão carregar ao menos:
+O envelope comum já está implementado como fundação para contratos novos. Comandos e eventos novos deverão carregar ao menos:
 
 - `messageId` único;
 - `messageType`;
@@ -307,7 +307,11 @@ Como convenção alvo para o catálogo futuro, comandos e eventos deverão carre
 
 Eventos descrevem fatos ocorridos e deverão ser nomeados no passado. Comandos expressam uma solicitação e deverão usar linguagem imperativa. Contratos publicados não deverão expor diretamente entidades JPA.
 
-O contrato `OrderCreated` v1 já implementado antecede a consolidação desse envelope. Ele usa `eventId` e `eventType` no lugar de `messageId` e `messageType`, repete os metadados principais nos headers e ainda não contém `causationId` nem origem explícita. Essa diferença está registrada como limitação do contrato v1 e deverá ser considerada na evolução compatível ou em uma futura versão maior.
+O contrato `OrderCreated` v1 antecede a consolidação desse envelope. Ele usa `eventId` e `eventType` no lugar de `messageId` e `messageType`, repete os metadados principais nos headers e não contém `causationId` nem origem explícita no payload. A factory e os testes preservam deliberadamente essa diferença; uniformizá-lo exige uma futura versão maior.
+
+A rota é resolvida pela tripla `MessageContract(category, messageType, schemaVersion)` antes do insert na Outbox. Tópico, chave, headers e texto JSON finais tornam-se parte da intenção transacional. O publisher não possui fallback nem reconstrói o contrato. Neste checkpoint, somente `OrderCreated` v1 possui uma rota de negócio registrada; o envelope comum ainda não é emitido por uma etapa da saga.
+
+O writer de `OrderCreated` exige uma transação externa ativa por propagação `MANDATORY`, preservando a atomicidade com pedido e itens. O banco define `created_at`, elegibilidade, retry, lease e publicação por `CURRENT_TIMESTAMP`; `occurred_at` permanece o instante de negócio da mensagem.
 
 ## 7. Persistência e isolamento
 
@@ -510,6 +514,9 @@ Decisões aprovadas:
 - comunicação interna exclusivamente por Kafka;
 - saga orquestrada pelo `order`;
 - Transactional Outbox;
+- envelope comum para contratos novos, preservando `OrderCreated` v1 como contrato legado;
+- rota Kafka resolvida por categoria, tipo e versão e persistida na Outbox;
+- publicação sequencial com claim curto e lease recuperável, sem transação PostgreSQL aberta durante o envio Kafka;
 - um servidor PostgreSQL compartilhado, com banco e usuário isolados por microsserviço stateful;
 - Flyway para migrations;
 - Resilience4j para resiliência síncrona quando aplicável;
@@ -534,7 +541,7 @@ Decisões aprovadas:
 As seguintes decisões serão detalhadas por especificações ou ADRs futuros:
 
 - contratos definitivos das APIs REST;
-- schemas e provisionamento do catálogo-alvo de comandos, eventos e tópicos; hoje somente `OrderCreated` v1 existe fisicamente;
+- schemas de payload e provisionamento dos futuros comandos, eventos e tópicos; hoje somente `OrderCreated` v1 existe fisicamente;
 - evolução do formato de serialização e estratégia de Schema Registry além do JSON textual atual;
 - estados completos da saga e suas compensações;
 - provedor, métodos de pagamento e ambiente sandbox;
@@ -554,6 +561,8 @@ As seguintes decisões serão detalhadas por especificações ou ADRs futuros:
 | Documento | Responsabilidade |
 |---|---|
 | [ADR 0001](adr/0001-topico-por-tipo-de-evento.md) | Decisão de tópico por tipo de evento e histórico da migração |
+| [ADR 0002](adr/0002-decisoes-checkout-mvp.md) | Decisões funcionais e operacionais do checkout MVP |
+| [ADR 0003](adr/0003-envelope-roteamento-e-lease-da-outbox.md) | Envelope, roteamento persistido, migration V6 e lease da Outbox |
 | [Kafka e Outbox do `order`](../order/docs/kafka-outbox.md) | Contrato `OrderCreated`, configuração, garantias, retry e limitações |
 | [Infraestrutura Kafka](../infrastructure/kafka/README.md) | Catálogo, topologia, provisionamento e verificação pelo `rpk` |
 | [Redpanda Console](../infrastructure/kafka/redpanda-console.md) | Navegação, inspeção de mensagens e diagnóstico local |

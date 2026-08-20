@@ -161,5 +161,6 @@ Esta decisão deverá ser revista quando o sistema adicionar múltiplos meios de
 - [Arquitetura completa do fluxo de compra](../../full-architecture.md)
 - [Arquitetura geral](../architecture.md)
 - [Diretrizes de desenvolvimento](../development-guidelines.md)
+- [ADR 0003 — Envelope, roteamento e lease da Outbox](0003-envelope-roteamento-e-lease-da-outbox.md)
 - [Especificação atual do `order`](../../order/docs/spec.md)
 - [Contrato de idempotência HTTP](../../order/docs/http-idempotency.md)

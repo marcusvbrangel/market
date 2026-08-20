@@ -230,6 +230,13 @@ Seus cinco itens são:
 - [x] A migration V5 cria `api_idempotency` e reforça as constraints de preço e produto.
 - [x] A migration V5 persiste `request_hash_version=1`, restringe moeda a `BRL` e vincula claim e pedido pelo mesmo cliente.
 - [x] Rollback da transação remove claim, pedido, itens e Outbox e permite nova tentativa da mesma chave.
+- [x] A migration V6 renomeia a tabela para `outbox_messages` e preserva as linhas legadas compatíveis.
+- [x] O envelope comum está definido para contratos novos sem alterar `OrderCreated` v1.
+- [x] A rota Kafka é resolvida por categoria, tipo e versão e persistida antes da publicação.
+- [x] O publisher usa tópico, chave, headers e payload persistidos.
+- [x] O envio Kafka ocorre fora da transação de claim, com lease recuperável e processamento sequencial.
+- [x] O writer da Outbox exige uma transação externa ativa com propagação `MANDATORY`.
+- [x] Timestamps operacionais e decisões de lease usam o relógio PostgreSQL.
 
 ## 7. Estratégia de testes implementada
 
@@ -240,11 +247,18 @@ Seus cinco itens são:
 | `CreateOrderServiceTest` | Criação, chave inválida e produto repetido antes da porta de persistência |
 | `OrderCreationRequestHasherTest` | Fingerprint v1, vetor SHA-256 conhecido, ordem dos itens e mudança de quantidade |
 | `OrderControllerTest` | Contrato JSON, headers de idempotência, `200`, `201`, `400`, `404` e `409` |
-| `OrderApplicationTests` | PostgreSQL real, Flyway V5, replay exato, conflito, constraints, rollback via `TransactionTemplate`, JPA, adaptador e Outbox |
-| `TransactionalOutboxPublisherTest` | Chave, tópico, headers, sucesso e retry do publicador |
-| `OutboxKafkaIntegrationTests` | Criação seguida de replay, PostgreSQL, Flyway, uma única publicação no Kafka e status `PUBLISHED` |
+| `OrderApplicationTests` | PostgreSQL real, Flyway V6, replay exato, conflito, constraints, rollback via `TransactionTemplate`, JPA, adaptador e Outbox roteada |
+| `MessageEnvelopeTest` | Estrutura e validações do envelope comum |
+| `OrderCreatedOutboxMessageFactoryTest` | Compatibilidade do payload e dos headers legados e registry sem fallback |
+| `OutboxMigrationTests` | Upgrade V5→V6, backfill, estados legados e aborto de contrato inconsistente |
+| `OutboxMessageRepositoryTests` | Claim, lease, retry, falha terminal, propriedade da lease e constraints |
+| `OutboxPublisherPropertiesTest` | Orçamento temporal mínimo da lease |
+| `TransactionalOutboxPublisherTest` | Rota persistida, processamento sequencial, interrupção e perda de lease |
+| `OutboxKafkaIntegrationTests` | Criação seguida de replay, contrato legado e envelope no destino persistido usando PostgreSQL e Kafka reais |
 
-Os testes integrados usam PostgreSQL `17.10-alpine` e Kafka em containers temporários. Eles confirmam a versão 5 do Flyway, consultam o pedido de referência, criam um pedido sem precificação, validam replay e conflito, exercitam constraints, publicam e consomem `OrderCreated` e confirmam a Outbox como `PUBLISHED`. No checkpoint aprovado em 20/08/2026, a suíte completa do `order` executou 50 testes, sem falhas, erros ou testes ignorados.
+Os testes integrados usam PostgreSQL `17.10-alpine` e Kafka em containers temporários. Eles confirmam a versão 6 do Flyway, consultam o pedido de referência, criam um pedido sem precificação, validam replay e conflito, exercitam constraints, migram linhas legadas, publicam `OrderCreated`, verificam rota persistida e confirmam a Outbox como `PUBLISHED`.
+
+No checkpoint anterior, aprovado em 20/08/2026, a suíte completa do `order` executou 50 testes sem falhas, erros ou testes ignorados. Após a Outbox V6, `./mvnw clean test` executou 73 testes, também com zero falhas, zero erros e zero testes ignorados.
 
 ## 8. Idempotência HTTP e migration V5
 
@@ -270,7 +284,7 @@ A decisão está no [ADR 0002](../../docs/adr/0002-decisoes-checkout-mvp.md), e 
 
 ## 9. Transactional Outbox
 
-O contrato operacional completo é mantido em [`kafka-outbox.md`](kafka-outbox.md). A decisão de usar um tópico por tipo de evento está no [ADR 0001](../../docs/adr/0001-topico-por-tipo-de-evento.md).
+O contrato operacional completo é mantido em [`kafka-outbox.md`](kafka-outbox.md). A decisão de usar um tópico por tipo de evento está no [ADR 0001](../../docs/adr/0001-topico-por-tipo-de-evento.md); envelope, roteamento e lease estão no [ADR 0003](../../docs/adr/0003-envelope-roteamento-e-lease-da-outbox.md).
 
 A migration `V3__support_order_creation_and_outbox.sql` criou `outbox_events`. Ao criar um pedido, o sistema grava:
 
@@ -282,15 +296,19 @@ A migration `V3__support_order_creation_and_outbox.sql` criou `outbox_events`. A
 - instante de ocorrência;
 - contador de tentativas iniciado em zero.
 
+A migration `V6__generalize_outbox_messages.sql` renomeou essa tabela para `outbox_messages`, converteu o payload para `TEXT` validado como objeto JSON e adicionou categoria, versão, origem, rota, chave Kafka, correlação, headers e lease. O preflight aceita somente os formatos históricos reconhecidos de `OrderCreated`; um formato parcial ou inconsistente aborta a migration. Payload e estado de entrega das linhas válidas são preservados.
+
+O upgrade do `order_db` local de V5 para V6 foi validado em 20/08/2026 com duas linhas `PUBLISHED`: ambas permaneceram nesse estado, mantiveram o payload e receberam tópico canônico e headers completos.
+
 ### 9.1 Contrato Kafka
 
 O payload contém `eventId`, `eventType`, `schemaVersion`, `correlationId`, `orderId`, `customerId`, `items` e `occurredAt`. Cada item contém apenas `productId` e `quantity`. Nome e valores dos produtos não fazem parte do comando de criação nem do evento atual.
 
-O publicador consulta registros `PENDING` elegíveis periodicamente usando `FOR UPDATE SKIP LOCKED`. Cada registro `OrderCreated` elegível é enviado para `market.order.events.created.v1` com `orderId` como chave e os headers `eventId`, `eventType`, `schemaVersion`, `correlationId` e `occurredAt`.
+Uma factory transforma `OrderCreated` em `OutboxMessage`, resolve a rota por `MessageContract(EVENT, OrderCreated, 1)` e persiste o tópico, `orderId` como chave, os cinco headers e o payload legado. O writer usa propagação `MANDATORY`, portanto somente participa de uma transação externa já ativa. O publisher transporta os valores persistidos sem reconstruí-los.
 
-Após o acknowledgement do Kafka, o registro muda para `PUBLISHED` e recebe `published_at`. Uma falha incrementa `attempts`, registra `last_error` e agenda `next_attempt_at`; ao atingir o limite configurado, o registro muda para `FAILED`.
+O publisher reivindica uma mensagem por transação curta usando `FOR UPDATE SKIP LOCKED`, muda seu status para `PROCESSING`, incrementa `attempts` e cria uma lease. O envio ocorre sequencialmente fora da transação. Após o acknowledgement, somente o proprietário da lease pode marcar `PUBLISHED`; uma falha conhecida registra `last_error` e agenda `next_attempt_at`, e uma lease expirada pode ser recuperada enquanto houver tentativas. `created_at`, retry, lease e publicação usam `CURRENT_TIMESTAMP` do PostgreSQL.
 
-A entrega é at-least-once. Consumidores deverão deduplicar eventos por `eventId`.
+A entrega é at-least-once. Contratos novos deverão ser deduplicados por `messageId`; `OrderCreated` v1 continua sendo deduplicado por `eventId`.
 
 Mapeamento oficial:
 
@@ -312,12 +330,16 @@ Mapeamento oficial:
 | Máximo de tentativas | `5` |
 | Atraso entre tentativas | `5s` |
 | Timeout de envio | `10s` |
+| `max.block.ms` do producer | `5000 ms` |
+| Duração da lease | `30s` |
 | Acknowledgement do produtor | `all` |
 | Idempotência do produtor | `true` |
 
-### 9.3 Limitação atual de roteamento
+Cada processo usa um único worker. A lease deve ser estritamente maior que `send-timeout + max.block.ms + 5s` de margem de segurança.
 
-O publicador atual envia todos os registros elegíveis para o tópico de criação e não seleciona o destino por `eventType`. Portanto, somente `OrderCreated` pode ser colocado na fila publicável com segurança até que exista roteamento explícito por contrato.
+### 9.3 Escopo atual do roteamento
+
+O mecanismo pode transportar comandos e eventos, mas o registry de produção possui apenas `OrderCreated` v1. Não existe rota default nem fallback. O envelope comum está implementado e testado, mas nenhum comando da saga é produzido ou provisionado neste incremento.
 
 ## 10. Aceite manual
 
@@ -329,7 +351,7 @@ Após a requisição, foram confirmados diretamente no PostgreSQL:
 - seus itens na tabela `order_items`;
 - o evento `OrderCreated` na tabela `outbox_events`, com status `PENDING`.
 
-Essa validação confirmou a persistência do pedido e da Outbox antes da inclusão do publicador. A publicação Kafka foi validada posteriormente por teste automatizado integrado com broker real.
+Essa validação confirmou a persistência do pedido e da Outbox antes da inclusão do publicador. A tabela citada foi renomeada para `outbox_messages` pela V6. A publicação Kafka foi validada posteriormente por teste automatizado integrado com broker real.
 
 Em 20 de agosto de 2026, na etapa do refactor de nomenclatura, o tópico atual foi provisionado, o tópico genérico anterior foi removido e a suíte então existente passou. Essa execução é histórica, anterior à idempotência HTTP, e não fixa a contagem da suíte atual. A remoção do tópico anterior foi destrutiva e não permite recuperar suas mensagens pelo broker.
 

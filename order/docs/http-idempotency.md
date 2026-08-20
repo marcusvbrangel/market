@@ -183,7 +183,7 @@ O fluxo de criação é sequencial:
 3. ainda fora da transação, o service calcula `OrderCreationRequestFingerprint`, cria pedido e evento e trunca o instante comum para microssegundos;
 4. `PostgresOrderCreationAdapter.createOrReplay` abre a transação;
 5. o adaptador tenta o claim com `INSERT ... ON CONFLICT (customer_id, idempotency_key) DO NOTHING RETURNING order_id`;
-6. se o claim for novo, persiste pedido e itens e insere `OrderCreated` em `outbox_events`;
+6. se o claim for novo, persiste pedido e itens e insere `OrderCreated` em `outbox_messages`; o writer exige essa transação externa por propagação `MANDATORY`;
 7. se já existir claim, carrega o registro e compara versão e hash do fingerprint;
 8. fingerprint igual reconstrói a resposta marcada como replay; versão ou hash diferente lança o conflito;
 9. o adaptador confirma ou reverte a única transação PostgreSQL.
@@ -308,14 +308,17 @@ Para um replay válido, devem continuar existindo exatamente um registro de idem
 - `CreateOrderServiceTest` verifica criação, produto repetido e chave inválida antes da persistência.
 - `OrderTest` protege também a unicidade de produto no agregado.
 - `OrderControllerTest` verifica header obrigatório, headers da resposta e conflito `409`.
-- `OrderApplicationTests` aplica V5 em PostgreSQL real e cobre replay exato, conflito, ausência de duplicação, rollback via `TransactionTemplate`, validação e constraints.
+- `OrderApplicationTests` aplica as migrations até V6 em PostgreSQL real e cobre as regras introduzidas por V5: replay exato, conflito, ausência de duplicação, rollback via `TransactionTemplate`, validação e constraints.
 - `OutboxKafkaIntegrationTests` executa criação e replay antes do publisher e confirma exatamente uma publicação Kafka de `OrderCreated`.
 
 No checkpoint aprovado em 20/08/2026, a suíte completa do `order` executou 50 testes, sem falhas, erros ou testes ignorados.
 
+Esse total pertence ao checkpoint de idempotência anterior à Outbox V6. Após o incremento V6, `./mvnw clean test` executou 73 testes, também sem falhas, erros ou testes ignorados.
+
 ## Referências
 
 - [ADR 0002 — Decisões do checkout MVP](../../docs/adr/0002-decisoes-checkout-mvp.md)
+- [ADR 0003 — Envelope, roteamento e lease da Outbox](../../docs/adr/0003-envelope-roteamento-e-lease-da-outbox.md)
 - [Especificação do `order`](spec.md)
 - [Plano do `order`](plan.md)
 - [Tarefas do `order`](tasks.md)

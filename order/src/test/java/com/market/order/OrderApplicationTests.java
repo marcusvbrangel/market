@@ -76,7 +76,7 @@ class OrderApplicationTests {
 			assertThat(found.items()).hasSize(5);
 			assertThat(found.totalAmount()).isEqualByComparingTo(new BigDecimal("6549.40"));
 		});
-		assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("5");
+		assertThat(flyway.info().current().getVersion().getVersion()).isEqualTo("6");
 		assertThat(jdbcClient.sql("SELECT count(*) FROM orders WHERE id = :id")
 				.param("id", SAMPLE_ORDER_ID)
 				.query(Long.class)
@@ -88,7 +88,7 @@ class OrderApplicationTests {
 	}
 
 	@Test
-	void shouldPersistNewOrderAndOutboxEventInTheSameFlow() {
+	void shouldPersistNewOrderAndRoutedOutboxMessageInTheSameFlow() {
 		var productId = UUID.randomUUID();
 		var result = createOrderService.create(
 				"application-test-" + UUID.randomUUID(),
@@ -108,20 +108,39 @@ class OrderApplicationTests {
 			});
 		});
 		assertThat(jdbcClient.sql("""
-				SELECT count(*) FROM outbox_events
+				SELECT count(*) FROM outbox_messages
 				WHERE aggregate_id = :orderId AND status = 'PENDING'
 				""")
 				.param("orderId", orderId)
 				.query(Long.class)
 				.single()).isEqualTo(1L);
 		assertThat(jdbcClient.sql("""
-				SELECT payload::text FROM outbox_events WHERE aggregate_id = :orderId
+				SELECT payload::text FROM outbox_messages WHERE aggregate_id = :orderId
 				""")
 				.param("orderId", orderId)
 				.query(String.class)
 				.single())
 				.contains(productId.toString())
 				.doesNotContain("productName", "unitPrice", "subtotal");
+		assertThat(jdbcClient.sql("""
+				SELECT concat_ws('|',
+				    message_category,
+				    message_type,
+				    schema_version::text,
+				    source,
+				    destination_topic,
+				    partition_key,
+				    correlation_id::text
+				)
+				FROM outbox_messages
+				WHERE aggregate_id = :orderId
+				""")
+				.param("orderId", orderId)
+				.query(String.class)
+				.single()).isEqualTo(
+				"EVENT|OrderCreated|1|order|market.order.events.created.v1|"
+						+ orderId + "|" + orderId
+		);
 	}
 
 	@Test
@@ -157,7 +176,7 @@ class OrderApplicationTests {
 		assertThat(countIdempotencyRecords(customerId, idempotencyKey)).isEqualTo(1L);
 		assertThat(countOrders(orderId)).isEqualTo(1L);
 		assertThat(countOrderItems(orderId)).isEqualTo(1L);
-		assertThat(countOutboxEvents(orderId)).isEqualTo(1L);
+		assertThat(countOutboxMessages(orderId)).isEqualTo(1L);
 	}
 
 	@Test
@@ -182,7 +201,7 @@ class OrderApplicationTests {
 		var orderId = idempotentOrderId(customerId, idempotencyKey);
 		assertThat(countIdempotencyRecords(customerId, idempotencyKey)).isEqualTo(1L);
 		assertThat(countOrders(orderId)).isEqualTo(1L);
-		assertThat(countOutboxEvents(orderId)).isEqualTo(1L);
+		assertThat(countOutboxMessages(orderId)).isEqualTo(1L);
 	}
 
 	@Test
@@ -319,7 +338,7 @@ class OrderApplicationTests {
 		assertThat(countIdempotencyRecords(customerId, idempotencyKey)).isZero();
 		assertThat(countOrders(rolledBackResult.orderId())).isZero();
 		assertThat(countOrderItems(rolledBackResult.orderId())).isZero();
-		assertThat(countOutboxEvents(rolledBackResult.orderId())).isZero();
+		assertThat(countOutboxMessages(rolledBackResult.orderId())).isZero();
 
 		var retryResult = createOrderService.create(
 				idempotencyKey,
@@ -332,7 +351,7 @@ class OrderApplicationTests {
 		assertThat(countIdempotencyRecords(customerId, idempotencyKey)).isEqualTo(1L);
 		assertThat(countOrders(retryResult.orderId())).isEqualTo(1L);
 		assertThat(countOrderItems(retryResult.orderId())).isEqualTo(1L);
-		assertThat(countOutboxEvents(retryResult.orderId())).isEqualTo(1L);
+		assertThat(countOutboxMessages(retryResult.orderId())).isEqualTo(1L);
 	}
 
 	@Test
@@ -632,8 +651,8 @@ class OrderApplicationTests {
 				.single();
 	}
 
-	private long countOutboxEvents(UUID orderId) {
-		return jdbcClient.sql("SELECT count(*) FROM outbox_events WHERE aggregate_id = :orderId")
+	private long countOutboxMessages(UUID orderId) {
+		return jdbcClient.sql("SELECT count(*) FROM outbox_messages WHERE aggregate_id = :orderId")
 				.param("orderId", orderId)
 				.query(Long.class)
 				.single();

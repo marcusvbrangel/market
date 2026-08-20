@@ -2,7 +2,7 @@
 
 ## 1. Estado atual
 
-O microsserviço expõe `GET /api/v1/orders/{orderId}` e `POST /api/v1/orders`. A consulta delega ao `OrderQueryService`, que usa `OrderQueryPort`; o adaptador PostgreSQL implementa a porta com Spring Data JPA. A criação exige `Idempotency-Key` e delega ao `CreateOrderService`, que valida e monta o comando fora da transação. `PostgresOrderCreationAdapter.createOrReplay` delimita a transação que grava claim, pedido, itens e um evento `OrderCreated` na Transactional Outbox. Um publisher agendado envia o evento para `market.order.events.created.v1`, aguarda o acknowledgement e registra sucesso, reagendamento ou falha terminal. O schema está na versão Flyway V5.
+O microsserviço expõe `GET /api/v1/orders/{orderId}` e `POST /api/v1/orders`. A consulta delega ao `OrderQueryService`, que usa `OrderQueryPort`; o adaptador PostgreSQL implementa a porta com Spring Data JPA. A criação exige `Idempotency-Key` e delega ao `CreateOrderService`, que valida e monta o comando fora da transação. `PostgresOrderCreationAdapter.createOrReplay` delimita a transação que grava claim, pedido, itens e `OrderCreated` em `outbox_messages`. Um publisher agendado reivindica cada mensagem em transação curta, envia sequencialmente pela rota persistida e registra sucesso, reagendamento ou falha terminal sob proteção de lease. O schema está na versão Flyway V6.
 
 ## 2. Direção arquitetural
 
@@ -139,7 +139,7 @@ Foram implementados:
 - migration Flyway V4 para metadados de retry;
 - testes unitários e integração real com PostgreSQL e Kafka via Testcontainers.
 
-A garantia é at-least-once e os futuros consumidores deverão deduplicar pelo `eventId`. O próximo plano funcional deverá especificar o consumo pelo `inventory` e o início da Saga orquestrada.
+Naquele checkpoint, a garantia já era at-least-once e os futuros consumidores de `OrderCreated` deveriam deduplicar por `eventId`. O plano foi refinado posteriormente para concluir envelope e Outbox roteada antes da Inbox e da saga.
 
 ## 8. Documentação OpenAPI — concluída
 
@@ -196,6 +196,29 @@ Foram implementados:
 
 O contrato detalhado está em [`http-idempotency.md`](http-idempotency.md). No checkpoint aprovado em 20/08/2026, a suíte completa do `order` executou 50 testes, sem falhas, erros ou testes ignorados.
 
-## 11. Próximo incremento
+## 11. Envelope comum e Outbox V6 roteada — concluída
 
-O próximo incremento arquitetural é criar o envelope comum e evoluir a Outbox para rotear comandos e eventos. Somente depois desse roteamento o `order` poderá gravar `ReserveInventory` junto com `OrderCreated` e iniciar a saga sem enviar contratos diferentes ao tópico de criação.
+Foram implementados:
+
+- `MessageEnvelope` para contratos novos;
+- `MessageContract(category, messageType, schemaVersion)`;
+- preservação integral do wire contract `OrderCreated` v1;
+- registry explícito sem rota default ou fallback;
+- factory e writer específicos para transformar `OrderCreated` em intenção durável;
+- writer com propagação `MANDATORY`, impedindo insert fora da transação externa da criação;
+- migration V6 com preflight dos formatos históricos conhecidos;
+- renomeação de `outbox_events` para `outbox_messages`;
+- persistência de categoria, versão, origem, destino, chave Kafka, correlação, causa e headers;
+- payload final como `TEXT` validado como objeto JSON;
+- claim individual com `FOR UPDATE SKIP LOCKED`, estado `PROCESSING` e lease;
+- envio sequencial fora da transação PostgreSQL;
+- atualização protegida por `lease_id` e recuperação de lease expirada;
+- relógio do PostgreSQL para elegibilidade e timestamps operacionais;
+- validação de que a lease excede o orçamento completo do envio Kafka;
+- testes unitários e integrados para contrato, migration, repository, publisher, rota e compatibilidade legada.
+
+O contrato e as garantias estão no [ADR 0003](../../docs/adr/0003-envelope-roteamento-e-lease-da-outbox.md) e em [`kafka-outbox.md`](kafka-outbox.md). Em 20/08/2026, `./mvnw clean test` executou 73 testes sem falhas, erros ou testes ignorados. Na mesma data, o upgrade local V5→V6 preservou duas linhas `PUBLISHED`, seus payloads, a rota canônica e os headers completos.
+
+## 12. Próximo incremento
+
+O próximo incremento arquitetural é adicionar Inbox, estado durável e histórico da saga no `order`. `ReserveInventory` somente será materializado e provisionado depois dessa base, para que o primeiro comando seja gravado atomicamente com o estado que permitirá interpretá-lo e compensá-lo.

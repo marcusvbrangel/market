@@ -213,3 +213,42 @@ Legenda:
 - [x] Criar o guia `order/docs/http-idempotency.md`.
 - [x] Registrar a execução final deste incremento: 50 testes, nenhuma falha, nenhum erro e nenhum teste ignorado em 20/08/2026.
 - [ ] Avaliar em ADR futuro um harness concorrente apenas de teste; a implementação de produção permanece sequencial e protegida pelo claim atômico do PostgreSQL.
+
+## 12. Envelope comum, roteamento e lease da Outbox V6
+
+- [x] Registrar as decisões no ADR 0003.
+- [x] Criar `MessageCategory`, `MessageContract` e `MessageEnvelope`.
+- [x] Validar campos obrigatórios, tipo, versão e origem do envelope.
+- [x] Preservar o payload flat e os cinco headers de `OrderCreated` v1.
+- [x] Definir o registry pela tripla categoria, tipo e versão.
+- [x] Rejeitar contrato sem rota explícita, sem default ou fallback.
+- [x] Criar factory e writer de `OrderCreated` para separar contrato, rota e persistência.
+- [x] Exigir uma transação externa ativa no writer por propagação `MANDATORY`.
+- [x] Criar `V6__generalize_outbox_messages.sql` sem alterar V3 ou V4.
+- [x] Validar antes do backfill somente os formatos históricos reconhecidos de `OrderCreated`.
+- [x] Abortar V6 para formato legado parcial, desconhecido ou inconsistente.
+- [x] Renomear `outbox_events` para `outbox_messages`.
+- [x] Renomear identidade e tipo para `message_id` e `message_type`.
+- [x] Persistir categoria, versão, origem, destino, chave, correlação, causa e headers.
+- [x] Converter o payload para `TEXT` validado como objeto JSON.
+- [x] Restringir headers a nomes não vazios e valores textuais.
+- [x] Preservar payload e estado de entrega das linhas legadas válidas.
+- [x] Tornar uma linha legada `PROCESSING` recuperável por lease expirada.
+- [x] Fazer o publisher usar somente rota, chave, headers e payload persistidos.
+- [x] Reivindicar uma mensagem por transação curta com `FOR UPDATE SKIP LOCKED`.
+- [x] Publicar sequencialmente e fora da transação PostgreSQL.
+- [x] Proteger conclusão e falha pelo `lease_id` proprietário.
+- [x] Recuperar lease expirada enquanto houver orçamento de claims.
+- [x] Marcar como `FAILED` a última lease expirada sem novo claim.
+- [x] Usar o relógio PostgreSQL para elegibilidade, lease, retry e publicação.
+- [x] Usar `CURRENT_TIMESTAMP` do PostgreSQL também no `created_at` da Outbox.
+- [x] Fazer `attempts` representar claims realizados.
+- [x] Continuar o lote após falha conhecida e interrompê-lo com restauração da flag em `InterruptedException`.
+- [x] Configurar `max.block.ms` e lease por variáveis de ambiente.
+- [x] Exigir lease maior que timeout, bloqueio máximo Kafka e margem de segurança.
+- [x] Testar envelope, factory, registry, migration, repository, propriedades e publisher.
+- [x] Testar `OrderCreated` legado e uma rota persistida distinta com PostgreSQL e Kafka reais.
+- [x] Validar o upgrade local V5→V6 preservando duas linhas `PUBLISHED`, seus payloads, o tópico canônico e headers completos.
+- [x] Documentar que o upgrade exige parar e drenar instâncias V5 antes do rename da tabela.
+- [x] Atualizar arquitetura, ADRs, especificação, plano, tarefas e guia operacional.
+- [x] Executar `./mvnw clean test` em 20/08/2026: 73 testes, zero falhas, zero erros e zero testes ignorados.

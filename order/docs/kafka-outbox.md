@@ -2,31 +2,39 @@
 
 ## 1. Escopo e estado atual
 
-O microsserviço `order` produz o evento de integração `OrderCreated` depois de persistir um pedido. A intenção de publicação é gravada na Transactional Outbox na mesma transação PostgreSQL do pedido e de seus itens.
+O microsserviço `order` produz `OrderCreated` v1 depois de persistir um pedido. Pedido, itens, claim HTTP idempotente e intenção de publicação são gravados na mesma transação PostgreSQL.
 
-O fluxo implementado termina na publicação Kafka. Ainda não existem consumidores, início efetivo da saga, DLT ou reprocessamento automático de eventos terminais.
+A Outbox está no schema Flyway V6 e pode transportar comandos e eventos para rotas diferentes. A rota é resolvida antes da persistência; o publisher envia o tópico, a chave, os headers e o payload armazenados sem inferir ou reconstruir o contrato.
 
-Este documento é a referência principal para contrato, configuração e garantias do produtor. O ADR registra a decisão e o histórico da migração; o README da infraestrutura registra topologia e provisionamento; o guia do Console cobre navegação e diagnóstico.
+O fluxo de negócio implementado ainda termina na publicação de `OrderCreated`. Não existem consumidor, Inbox, estado de saga, DLT ou reprocessamento automático de mensagens terminais. A estrutura do envelope comum existe, mas nenhum comando da saga é produzido neste incremento.
 
 ```mermaid
 flowchart LR
     Client[Cliente]
     API[POST /api/v1/orders]
     Service[CreateOrderService]
-    DB[(orders + order_items)]
-    Outbox[(outbox_events)]
+    DB[(api_idempotency + orders + order_items)]
+    Factory[OrderCreatedOutboxMessageFactory]
+    Routes[KafkaMessageRouteRegistry]
+    Outbox[(outbox_messages)]
+    Claim[Claim curto + lease]
     Publisher[TransactionalOutboxPublisher]
-    Kafka[market.order.events.created.v1]
+    Kafka[Destino persistido]
 
     Client --> API
     API --> Service
     Service -->|mesma transação| DB
-    Service -->|mesma transação| Outbox
-    Outbox -->|polling + lock| Publisher
-    Publisher -->|OrderCreated| Kafka
+    Service --> Factory
+    Factory --> Routes
+    Factory -->|mesma transação| Outbox
+    Outbox --> Claim
+    Claim -->|commit antes do Kafka| Publisher
+    Publisher -->|tópico + chave + headers + payload persistidos| Kafka
 ```
 
-## 2. Identificadores oficiais
+Este documento é a referência operacional do produtor. As decisões estão nos ADRs 0001 e 0003; o README da infraestrutura descreve provisionamento, e o guia do Console descreve inspeção local.
+
+## 2. Identificadores oficiais de `OrderCreated` v1
 
 | Camada | Identificador |
 |---|---|
@@ -34,12 +42,13 @@ flowchart LR
 | Propriedade Spring | `market.kafka.topics.order-created-events` |
 | Variável de ambiente | `ORDER_CREATED_EVENTS_TOPIC` |
 | Binding Java | `KafkaTopicProperties.orderCreatedEvents()` |
-| Tipo do evento | `OrderCreated` |
+| Tipo | `OrderCreated` |
+| Categoria | `EVENT` |
 | Versão | `1` |
 
-A decisão de usar um tópico por tipo de evento e o significado da versão estão registrados no [ADR 0001](../../docs/adr/0001-topico-por-tipo-de-evento.md).
+A decisão de um tópico por evento está no [ADR 0001](../../docs/adr/0001-topico-por-tipo-de-evento.md). Envelope, roteamento e lease estão no [ADR 0003](../../docs/adr/0003-envelope-roteamento-e-lease-da-outbox.md).
 
-## 3. Contrato `OrderCreated` v1
+## 3. Contrato legado `OrderCreated` v1
 
 ### 3.1 Tópico e particionamento
 
@@ -54,11 +63,9 @@ A decisão de usar um tópico por tipo de evento e o significado da versão est�
 | Retenção | `604800000 ms` — 7 dias |
 | Formato do valor | JSON UTF-8 sem schema registrado |
 
-O produtor não informa uma partição explicitamente. O Kafka seleciona a partição a partir da chave `orderId`, mantendo os eventos de um mesmo pedido na mesma partição enquanto o número de partições e a estratégia do produtor forem preservados.
+O produtor não escolhe uma partição numericamente. O Kafka a calcula a partir de `orderId`, preservando afinidade enquanto o número de partições e a estratégia do produtor forem mantidos.
 
 ### 3.2 Payload
-
-Exemplo completo:
 
 ```json
 {
@@ -80,109 +87,225 @@ Exemplo completo:
 
 | Campo | Tipo | Semântica |
 |---|---|---|
-| `eventId` | UUID | Identificador único do evento e da linha de Outbox |
+| `eventId` | UUID | Identificador do evento; corresponde a `message_id` na Outbox V6 |
 | `eventType` | String | Constante `OrderCreated` |
 | `schemaVersion` | Integer | Constante `1` |
-| `correlationId` | UUID | Atualmente igual ao `orderId` |
-| `orderId` | UUID | Identificador do pedido criado e chave de negócio |
+| `correlationId` | UUID | Igual ao `orderId` neste contrato legado |
+| `orderId` | UUID | Pedido criado e chave de negócio |
 | `customerId` | UUID | Cliente proprietário do pedido |
-| `items` | Array | Itens solicitados, obrigatório e não vazio |
+| `items` | Array | Obrigatório e não vazio |
 | `items[].productId` | UUID | Produto solicitado |
-| `items[].quantity` | Integer | Quantidade positiva solicitada |
-| `occurredAt` | Instant ISO-8601 | Instante UTC usado na criação do pedido e do evento |
+| `items[].quantity` | Integer | Quantidade positiva |
+| `occurredAt` | Instant ISO-8601 | Instante UTC comum ao pedido e ao evento |
 
-`eventId` e `orderId` são identificadores diferentes. O valor publicado vem do `JSONB` da Outbox convertido para texto; consumidores não devem depender de espaços, indentação ou ordem física das propriedades.
+O evento omite `orderNumber`, status, nome, preço, subtotal, total e moeda. Consumidores não podem depender de espaços, indentação ou ordem textual das propriedades JSON.
 
-O evento omite deliberadamente `orderNumber` e status, embora o pedido já seja criado como `PENDING`. Nome do produto, preço unitário, subtotal, total e moeda ainda não estão disponíveis e dependem de etapas futuras de catálogo, estoque e precificação.
+### 3.3 Headers
 
-### 3.3 Headers Kafka
-
-Todos os headers são gravados como bytes UTF-8.
+Todos os valores são texto UTF-8.
 
 | Header | Valor |
 |---|---|
 | `eventId` | UUID do evento |
 | `eventType` | `OrderCreated` |
-| `schemaVersion` | Texto `1` |
+| `schemaVersion` | `1` |
 | `correlationId` | UUID do pedido |
 | `occurredAt` | Instant ISO-8601 em UTC |
 
-Os metadados também aparecem no payload. No código atual, o header `schemaVersion` é definido pelo publicador como `1`; ele não é extraído dinamicamente do payload.
+A factory persiste os cinco headers com a intenção de publicação. O publisher apenas os converte para bytes UTF-8. Ele não fixa `schemaVersion`, não monta headers e não reserializa o payload.
 
-### 3.4 Obrigações dos futuros consumidores
+### 3.4 Compatibilidade
 
-Consumidores deverão:
+`OrderCreated` v1 permanece deliberadamente fora do envelope comum. Ele não recebe `messageId`, `messageType`, `source`, `causationId` ou `payload` aninhado. Essa mudança exigiria `OrderCreated` v2.
 
-- assinar explicitamente `market.order.events.created.v1`;
-- usar `eventId` para deduplicação durável;
-- validar `eventType` e `schemaVersion` antes de processar;
-- usar a chave `orderId` quando dependerem da ordem por pedido;
-- tolerar reentrega do mesmo evento;
-- não depender da ordem textual dos campos JSON;
-- tratar um tipo de evento diferente como violação de contrato.
+Consumidores desse contrato deverão:
 
-## 4. Atomicidade e garantia de entrega
+- deduplicar por `eventId`;
+- validar `eventType` e `schemaVersion`;
+- tolerar redelivery;
+- usar `orderId` quando dependerem da afinidade por pedido;
+- tolerar campos aditivos desconhecidos;
+- rejeitar um tipo incompatível como violação de contrato.
 
-`CreateOrderService.create()` valida e monta pedido, evento e fingerprint fora da transação. A fronteira `@Transactional` começa em `PostgresOrderCreationAdapter.createOrReplay()`. Para uma criação nova, o adaptador persiste atomicamente:
+## 4. Envelope comum dos contratos novos
 
-1. o claim e o snapshot de resposta em `api_idempotency`;
-2. o pedido;
-3. seus itens;
-4. o payload `OrderCreated` em `outbox_events` com status `PENDING`.
+```json
+{
+  "messageId": "11111111-1111-1111-1111-111111111111",
+  "messageType": "ReserveInventory",
+  "schemaVersion": 1,
+  "occurredAt": "2026-08-20T20:15:30.123456Z",
+  "source": "order",
+  "correlationId": "22222222-2222-2222-2222-222222222222",
+  "causationId": "33333333-3333-3333-3333-333333333333",
+  "orderId": "44444444-4444-4444-4444-444444444444",
+  "payload": {}
+}
+```
 
-Rollback reverte os quatro efeitos e libera a chave para nova tentativa. No replay, o adaptador apenas compara o fingerprint persistido e reconstrói a resposta, sem criar outra mensagem na Outbox.
-
-O pedido não é publicado diretamente durante a requisição HTTP. O scheduler executa posteriormente o publicador, que:
-
-1. seleciona registros `PENDING` elegíveis;
-2. ordena por `created_at`;
-3. limita pelo tamanho configurado do lote;
-4. bloqueia com `FOR UPDATE SKIP LOCKED`;
-5. envia cada evento e espera o acknowledgement do Kafka;
-6. marca `PUBLISHED` somente depois da confirmação.
-
-A publicação confirmada tem semântica **at-least-once** e permite duplicatas. `acks=all` e a idempotência do produtor protegem contra parte das duplicações do cliente Kafka, mas não criam uma transação distribuída entre PostgreSQL e Kafka. Se o Kafka confirmar e o commit PostgreSQL falhar antes de persistir `PUBLISHED`, o evento poderá ser enviado novamente. A entrega automática não é ilimitadamente garantida: depois de `max-attempts`, o registro fica `FAILED` e exige intervenção.
-
-`publishBatch()` executa o lote inteiro em uma única transação PostgreSQL. Os locks permanecem ativos enquanto os envios Kafka síncronos são aguardados, e as mudanças para `PUBLISHED` ou retry só se tornam duráveis no commit ao final do lote. Uma falha Kafka capturada em um item não impede o processamento dos itens seguintes; uma falha posterior da transação pode reverter estados já atualizados e provocar reentrega de mensagens que o Kafka confirmou.
-
-## 5. Estados e retry da Outbox
-
-| Estado | Significado atual |
+| Campo | Regra |
 |---|---|
-| `PENDING` | Aguardando primeira tentativa ou retry elegível |
+| `messageId` | UUID obrigatório da intenção de entrega |
+| `messageType` | Texto obrigatório, não vazio, com até 100 caracteres |
+| `schemaVersion` | Inteiro positivo |
+| `occurredAt` | `Instant` obrigatório em UTC |
+| `source` | Corresponde a `[a-z][a-z0-9-]{0,99}` |
+| `correlationId` | UUID obrigatório da jornada |
+| `causationId` | UUID da mensagem causadora; pode ser nulo em uma raiz |
+| `orderId` | UUID obrigatório e chave Kafka dos contratos da saga |
+| `payload` | Objeto específico, obrigatório e validado pelo contrato |
+
+`MessageContract` identifica a rota pela tripla exata `category`, `messageType` e `schemaVersion`. A categoria é `COMMAND` ou `EVENT` e pertence aos metadados da Outbox, não ao envelope publicado.
+
+`messageId` permanece igual em retry ou redelivery da mesma linha. `operationId`, quando o contrato produzir um efeito idempotente, pertence ao payload. Uma nova mensagem para a mesma operação pode ter outro `messageId`, mas conserva o `operationId`.
+
+O código já fornece `MessageEnvelope`, `MessageContract` e suas validações. Ainda não existe um `ReserveInventory` produtivo; esse nome aparece apenas como exemplo contratual. A única rota de negócio registrada é `OrderCreated` v1.
+
+## 5. Roteamento e modelo persistente V6
+
+### 5.1 Resolução da rota
+
+`KafkaMessageRouteRegistry` recebe um `MessageContract` completo e devolve uma rota somente quando a tripla foi registrada explicitamente. Não existe default, wildcard nem fallback.
+
+Para `OrderCreated`:
+
+1. `OrderCreatedOutboxMessageFactory` valida o contrato;
+2. consulta o registry;
+3. serializa o payload legado uma vez;
+4. monta os cinco headers;
+5. define `orderId` como chave;
+6. cria `OutboxMessage` com todos os dados finais;
+7. `OrderCreatedOutboxWriter` persiste a mensagem dentro da transação da criação do pedido.
+
+O método `append` do writer usa propagação `MANDATORY`: uma chamada sem transação externa ativa falha em vez de produzir uma gravação independente do pedido.
+
+O publisher não depende de `KafkaTopicProperties`: a configuração é resolvida antes do insert e o destino persistido torna-se parte da intenção durável.
+
+### 5.2 Tabela `outbox_messages`
+
+| Coluna | Semântica |
+|---|---|
+| `message_id` | Identidade da mensagem e chave primária |
+| `aggregate_id`, `aggregate_type` | Agregado proprietário da alteração |
+| `message_category` | `COMMAND` ou `EVENT` |
+| `message_type`, `schema_version` | Contrato versionado |
+| `source` | Bounded context produtor |
+| `destination_topic` | Tópico físico resolvido no insert |
+| `partition_key` | Chave Kafka final |
+| `correlation_id`, `causation_id` | Jornada e causa; a causa pode ser nula |
+| `headers` | Objeto `JSONB` com nomes não vazios e valores string |
+| `payload` | `TEXT` que deve ser um objeto JSON válido |
+| `status` | `PENDING`, `PROCESSING`, `PUBLISHED` ou `FAILED` |
+| `attempts` | Quantidade de claims realizados |
+| `next_attempt_at` | Elegibilidade de um retry conhecido |
+| `last_error` | Erro sanitizado com até 1.000 caracteres |
+| `lease_id`, `lease_until` | Propriedade e expiração do processamento |
+| `occurred_at` | Instante de negócio da mensagem |
+| `created_at`, `published_at` | Instantes operacionais definidos pelo relógio PostgreSQL |
+
+Quando `status='PROCESSING'`, `lease_id` e `lease_until` são obrigatórios. Nos demais estados, ambos devem ser nulos.
+
+### 5.3 Migração de V5 para V6
+
+V6:
+
+- aceita exatamente o payload mínimo antigo, sem `eventType`, `schemaVersion` e `correlationId`, ou o payload flat completo atual;
+- exige que `eventId`, `orderId` e `occurredAt` correspondam às colunas e, no formato completo, que os três metadados adicionais sejam coerentes;
+- aborta integralmente se encontrar presença parcial desses metadados, valor divergente ou outro contrato;
+- renomeia `outbox_events` para `outbox_messages`;
+- renomeia `id` para `message_id` e `event_type` para `message_type`;
+- converte o payload de `JSONB` para `TEXT` validado como objeto JSON;
+- adiciona contrato, origem, rota, chave, correlação, headers e lease;
+- deriva rota e headers das colunas e do agregado, como fazia o publisher antigo;
+- preserva o payload sem acrescentar os campos ausentes, além de status, tentativas, reagendamento, erro e timestamps;
+- preserva estados terminais;
+- transforma uma linha legada `PROCESSING` em uma lease imediatamente recuperável;
+- recria os índices de elegibilidade e lease.
+
+O backfill usa `market.order.events.created.v1`, o nome canônico do contrato. Uma instalação que tenha usado outro `ORDER_CREATED_EVENTS_TOPIC` precisa reconciliar todas as linhas legadas antes da V6, sobretudo `PENDING`, `PROCESSING` e qualquer `FAILED` que possa ser reaberta; caso contrário, até o histórico publicado receberá o destino canônico como metadado. O ambiente local usa o nome canônico.
+
+O upgrade não aceita instâncias V5 e V6 executando ao mesmo tempo. Antes da migration, todas as instâncias V5 devem ser paradas e seus trabalhos drenados, pois elas ainda acessam `outbox_events`; somente depois da V6 a aplicação nova, que acessa `outbox_messages`, pode iniciar. O piloto aceita essa parada coordenada.
+
+Em 20/08/2026, o upgrade do `order_db` local de V5 para V6 foi executado com duas linhas já `PUBLISHED`. As duas permaneceram publicadas, conservaram seus payloads e receberam o tópico canônico e os cinco headers completos.
+
+## 6. Atomicidade e garantia de entrega
+
+### 6.1 Criação do pedido
+
+`CreateOrderService.create()` valida e monta pedido, evento e fingerprint antes da transação. `PostgresOrderCreationAdapter.createOrReplay()` abre a fronteira transacional. Para uma criação nova, confirma ou reverte em conjunto:
+
+1. claim e snapshot de resposta em `api_idempotency`;
+2. pedido;
+3. itens;
+4. `OrderCreated` em `outbox_messages` com status `PENDING`.
+
+Replay HTTP válido não cria nova linha de Outbox.
+
+`OrderCreatedOutboxWriter.append` usa `Propagation.MANDATORY`, tornando essa fronteira uma pré-condição executável: o writer não abre uma transação independente nem permite o insert fora da transação de criação.
+
+### 6.2 Claim curto e envio sequencial
+
+Cada ciclo agendado processa sequencialmente no máximo `batch-size` mensagens. Para cada posição:
+
+1. `claimNext()` abre uma transação curta;
+2. marca como `FAILED` claims esgotados e já expirados;
+3. seleciona uma linha `PENDING` elegível ou `PROCESSING` com lease expirada;
+4. usa `FOR UPDATE SKIP LOCKED` e limita a uma linha;
+5. muda para `PROCESSING`, incrementa `attempts`, limpa `next_attempt_at` e cria nova lease;
+6. confirma a transação;
+7. publica fora da transação PostgreSQL;
+8. aguarda o acknowledgement Kafka de forma síncrona;
+9. grava sucesso ou falha somente com o mesmo `lease_id`.
+
+`created_at`, elegibilidade, `lease_until`, `next_attempt_at` e `published_at` usam `CURRENT_TIMESTAMP` do PostgreSQL. Isso evita arbitrar leases com relógios locais divergentes entre instâncias. `occurred_at` continua vindo do contrato de negócio.
+
+Uma falha conhecida é persistida e não impede o processamento da próxima mensagem elegível. Uma interrupção restaura a flag da thread e encerra o lote atual.
+
+### 6.3 At-least-once
+
+`acks=all` e a idempotência do producer reduzem duplicatas causadas pelo cliente Kafka, mas não criam uma transação distribuída.
+
+Se o Kafka confirmar e o processo cair antes de persistir `PUBLISHED`, a lease expira e outro claim pode publicar a mesma mensagem. Se um proprietário antigo tentar atualizar depois de outra execução assumir a linha, o `lease_id` diferente impede a sobrescrita.
+
+A garantia continua sendo **at-least-once**. Consumidores novos deduplicam por `messageId`; consumidores de `OrderCreated` v1, por `eventId`.
+
+## 7. Estados, lease e retry
+
+| Estado | Significado |
+|---|---|
+| `PENDING` | Aguarda primeira tentativa ou `next_attempt_at` |
+| `PROCESSING` | Claim ativo protegido por `lease_id` e `lease_until` |
 | `PUBLISHED` | Kafka confirmou e a confirmação foi persistida |
-| `FAILED` | Limite de tentativas atingido; exige intervenção |
-| `PROCESSING` | Permitido pelo schema, mas não utilizado pelo publicador atual |
+| `FAILED` | Orçamento de claims esgotado; exige intervenção |
 
-Em caso de sucesso, `attempts` também é incrementado; portanto, o campo representa o total de tentativas, não apenas falhas.
+`attempts` é incrementado no claim, antes da chamada Kafka. Portanto, inclui sucesso, falha conhecida, timeout e claim interrompido por crash. Se a última lease permitida expirar, a linha passa para `FAILED` sem ser reivindicada novamente.
 
-Em caso de erro:
+Em falha conhecida:
 
-- `attempts` é incrementado;
-- `last_error` recebe até 1.000 caracteres;
-- uma tentativa não terminal mantém o estado `PENDING` e define `next_attempt_at`;
-- ao atingir `max-attempts`, o estado passa para `FAILED` e não existe novo agendamento automático.
+- `last_error` recebe a causa raiz abreviada;
+- uma tentativa não terminal volta para `PENDING` e recebe `next_attempt_at`;
+- a tentativa terminal passa para `FAILED` sem novo agendamento;
+- lease e identificador do proprietário são limpos.
 
-O retry usa atraso fixo. Não há backoff exponencial, jitter, DLT, replay automático de `FAILED` ou política implementada de limpeza para registros `PUBLISHED` e `FAILED`.
+O retry usa atraso fixo. Não existem backoff exponencial, jitter, DLT, replay automático de `FAILED` ou limpeza automática de linhas terminais.
 
-## 6. Configuração do `order`
+## 8. Configuração do `order`
 
-### 6.1 Kafka
+### 8.1 Kafka
 
 | Propriedade | Variável de ambiente | Default |
 |---|---|---|
 | `spring.kafka.bootstrap-servers` | `KAFKA_BOOTSTRAP_SERVERS` | `localhost:19092` |
 | `market.kafka.topics.order-created-events` | `ORDER_CREATED_EVENTS_TOPIC` | `market.order.events.created.v1` |
+| `spring.kafka.producer.properties.max.block.ms` | `KAFKA_PRODUCER_MAX_BLOCK_MS` | `5000 ms` |
 
-Configuração do produtor:
-
-| Propriedade | Valor |
+| Propriedade do producer | Valor |
 |---|---|
 | `acks` | `all` |
 | `enable.idempotence` | `true` |
 | `max.in.flight.requests.per.connection` | `5` |
 
-### 6.2 Publicador da Outbox
+### 8.2 Publisher
 
 | Propriedade | Variável de ambiente | Default |
 |---|---|---|
@@ -192,10 +315,20 @@ Configuração do produtor:
 | `market.outbox.publisher.max-attempts` | `OUTBOX_PUBLISHER_MAX_ATTEMPTS` | `5` |
 | `market.outbox.publisher.retry-delay` | `OUTBOX_PUBLISHER_RETRY_DELAY` | `5s` |
 | `market.outbox.publisher.send-timeout` | `OUTBOX_PUBLISHER_SEND_TIMEOUT` | `10s` |
+| `market.outbox.publisher.lease-duration` | `OUTBOX_PUBLISHER_LEASE_DURATION` | `30s` |
+| `market.outbox.publisher.kafka-max-block-milliseconds` | `KAFKA_PRODUCER_MAX_BLOCK_MS` | `5000 ms` |
 
-Com os defaults, a quinta falha torna o registro terminalmente `FAILED`.
+A lease deve ser estritamente maior que:
 
-## 7. Provisionamento local
+```text
+send-timeout + max.block.ms + margem de segurança de 5s
+```
+
+Com os defaults, o orçamento mínimo é `20s` e a lease é `30s`. A aplicação falha na configuração quando essa regra não é satisfeita.
+
+O scheduler possui um worker por processo e o publisher não introduz paralelismo em Java.
+
+## 9. Provisionamento local
 
 Na raiz do monorepo:
 
@@ -218,61 +351,50 @@ docker compose -f compose.yaml exec -T redpanda \
   rpk topic describe market.order.events.created.v1 --brokers redpanda:9092
 ```
 
-`infrastructure/kafka/topics.yaml` é o catálogo declarativo versionado. O provisionador local `create-topics.sh` ainda repete explicitamente o nome e as propriedades do tópico; ele não interpreta o YAML.
+`infrastructure/kafka/topics.yaml` é o catálogo declarativo. O provisionador local repete explicitamente os valores e ainda não interpreta o YAML. Ele cria ou descreve, mas não renomeia, exclui nem reconcilia configurações.
 
-O script é idempotente apenas para criação:
+O tópico de teste `market.test.commands.routing.v1` não pertence ao catálogo e é criado apenas pelo broker descartável do teste integrado. Nenhum tópico novo da saga foi provisionado.
 
-- cria o tópico quando ele não existe;
-- descreve o tópico quando ele já existe;
-- não renomeia tópicos;
-- não exclui tópicos;
-- não reconcilia mudanças de partições, retenção ou outras configurações.
+## 10. Verificação automatizada
 
-Enquanto o script não for gerado a partir do catálogo, alterações deverão manter `topics.yaml`, `create-topics.sh`, a configuração do produtor e os testes sincronizados.
-
-## 8. Registro do refactor
-
-Em 20 de agosto de 2026, o piloto adotou os quatro identificadores oficiais da seção 2. Não houve alias, fallback para o identificador anterior nem publicação dupla.
-
-O tópico atual foi provisionado no Redpanda local com três partições, fator de replicação `1` e retenção de sete dias. O tópico genérico anterior foi removido. Essa exclusão foi destrutiva e eventuais mensagens antigas não são recuperáveis pelo broker.
-
-Não havia consumidor implementado para migrar. Código, testes, infraestrutura, documentação e artefatos gerados foram atualizados, e uma busca integral confirmou a ausência de referências obsoletas.
-
-## 9. Verificação automatizada
-
-A suíte automatizada cobre o publicador e suas integrações relevantes. No checkpoint aprovado em 20/08/2026, a suíte completa do `order` executou 50 testes, sem falhas, erros ou testes ignorados.
-
-| Teste | Evidência fornecida |
+| Teste | Evidência |
 |---|---|
-| `TransactionalOutboxPublisherTest` | Tópico, chave, valor, `eventId`, sucesso e encaminhamento de falha para retry |
-| `OutboxKafkaIntegrationTests` | PostgreSQL e Kafka reais, criação seguida de replay, exatamente uma publicação, consumo, payload essencial, headers principais e estado `PUBLISHED`; o broker de teste permite criação automática e não valida `kafka-init` |
-| `OrderApplicationTests` | Flyway V5, idempotência HTTP, rollback via `TransactionTemplate`, persistência do pedido e evento `PENDING` na Outbox |
+| `MessageEnvelopeTest` | Campos, serialização e validações essenciais do envelope |
+| `OrderCreatedOutboxMessageFactoryTest` | Wire contract legado, rota configurada e rejeição de contrato sem rota |
+| `OutboxMigrationTests` | Upgrade V5→V6, backfill, estados terminais, recuperação de `PROCESSING` e preflight abortando contrato desconhecido |
+| `OutboxMessageRepositoryTests` | Claim, publicação, retry, falha terminal, lease expirada, proteção do proprietário e headers textuais |
+| `OutboxPublisherPropertiesTest` | Lease maior que o orçamento Kafka completo |
+| `TransactionalOutboxPublisherTest` | Rota e conteúdo persistidos, continuidade após falha, interrupção, limite e perda de lease |
+| `OutboxKafkaIntegrationTests` | PostgreSQL e Kafka reais, replay sem duplicação, contrato legado e envelope enviado ao destino persistido |
+| `OrderApplicationTests` | Flyway V6, atomicidade com pedido e idempotência HTTP |
 
-Lacunas de teste conhecidas:
+Em 20/08/2026, `./mvnw clean test` executou 73 testes, com zero falhas, zero erros e zero testes ignorados.
 
-- transição terminal para `FAILED` não possui teste direto;
-- persistência de `next_attempt_at`, `last_error` e dos incrementos de retry não possui teste direto do repository;
-- todos os headers não são validados em conjunto;
-- topologia e retenção do tópico não são verificadas por teste automatizado;
-- o script `kafka-init` foi validado operacionalmente, mas não possui teste automatizado;
-- não há consumidor de negócio nem teste de deduplicação, DLT ou replay.
+Lacunas conhecidas:
 
-## 10. Limitações e próximos passos
+- não existe teste concorrente com duas instâncias reais do publisher;
+- `last_error` ainda não possui asserção direta de persistência no repository;
+- topologia, retenção e `kafka-init` não possuem teste automatizado;
+- não existem consumidor de negócio, Inbox, deduplicação, DLT ou replay;
+- não existe política implementada de retenção da tabela.
 
-- o publicador envia todos os registros elegíveis para o tópico de criação sem rotear por `eventType`; até existir roteamento, somente `OrderCreated` pode ser gravado como evento publicável;
-- não existe consumidor no `inventory`;
-- o Redpanda local oferece Schema Registry, mas `OrderCreated` não possui schema registrado e o produtor não o utiliza;
-- não existem DLT, retry topics ou ferramenta de reprocessamento;
+## 11. Limitações e próximo passo
+
+- somente `OrderCreated` v1 possui rota produtiva;
+- o envelope comum está implementado, mas ainda não é emitido por um caso de uso;
+- `inventory` ainda não consome mensagens;
+- o Redpanda local oferece Schema Registry, mas `OrderCreated` e o envelope comum ainda não possuem schema registrado nem usam esse recurso;
+- `FAILED` exige intervenção manual;
 - não há métricas ou alertas específicos da Outbox;
-- o contrato v1 ainda não possui `causationId` nem origem explícita;
-- a política de retenção e limpeza da tabela de Outbox ainda não foi definida.
+- o contrato legado não possui `causationId` nem `source` no payload.
 
-O próximo passo funcional continua sendo especificar o consumo idempotente pelo `inventory` e o início da saga orquestrada.
+O próximo incremento é adicionar Inbox, estado persistente e histórico da saga no `order`. Somente depois disso `ReserveInventory` deve ser definido, provisionado e persistido atomicamente com o início da saga.
 
-## 11. Referências
+## 12. Referências
 
+- [ADR 0001 — Tópico por tipo de evento](../../docs/adr/0001-topico-por-tipo-de-evento.md)
+- [ADR 0003 — Envelope, roteamento e lease](../../docs/adr/0003-envelope-roteamento-e-lease-da-outbox.md)
 - [Especificação do `order`](spec.md)
 - [Plano do `order`](plan.md)
 - [Infraestrutura Kafka](../../infrastructure/kafka/README.md)
-- [Uso do Redpanda Console](../../infrastructure/kafka/redpanda-console.md)
-- [ADR 0001](../../docs/adr/0001-topico-por-tipo-de-evento.md)
+- [Redpanda Console](../../infrastructure/kafka/redpanda-console.md)
