@@ -44,7 +44,7 @@ class TransactionalOutboxPublisher {
     private void publish(OutboxEvent event) {
         try {
             var record = new ProducerRecord<>(
-                    topics.orderEvents(),
+                    topics.orderCreatedEvents(),
                     event.aggregateId().toString(),
                     event.payload()
             );

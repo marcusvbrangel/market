@@ -118,7 +118,7 @@ Legenda:
 - [x] Adicionar Spring Kafka ao microsserviço `order`.
 - [x] Configurar bootstrap servers por variável de ambiente.
 - [x] Configurar producer idempotente com `acks=all`.
-- [x] Definir `market.order.events.v1` em `infrastructure/kafka/topics.yaml`.
+- [x] Definir `market.order.events.created.v1` em `infrastructure/kafka/topics.yaml`.
 - [x] Criar script idempotente de provisionamento do tópico.
 - [x] Integrar o provisionamento ao Docker Compose com `kafka-init`.
 - [x] Validar duas execuções consecutivas do provisionador no Redpanda local.
@@ -150,3 +150,19 @@ Legenda:
 - [x] Testar o acesso à Swagger UI.
 - [x] Criar o guia `order/docs/openapi.md`.
 - [x] Executar a suíte completa com 23 testes e nenhuma falha.
+
+## 10. Refactor e documentação do tópico `OrderCreated`
+
+- [x] Adotar `market.order.events.created.v1` como nome físico do tópico.
+- [x] Renomear a propriedade para `market.kafka.topics.order-created-events`.
+- [x] Renomear a variável para `ORDER_CREATED_EVENTS_TOPIC`.
+- [x] Renomear o binding Java para `orderCreatedEvents`.
+- [x] Atualizar o catálogo declarativo e o provisionador local.
+- [x] Atualizar testes unitários e de integração.
+- [x] Regenerar artefatos rastreados e remover referências obsoletas.
+- [x] Provisionar e validar o tópico atual no Redpanda local.
+- [x] Remover o tópico genérico anterior do ambiente piloto.
+- [x] Executar os 23 testes sem falhas após o refactor.
+- [x] Registrar a decisão de nomenclatura no ADR 0001.
+- [x] Documentar payload, headers, configuração, garantias, retry e limitações.
+- [x] Confirmar por busca integral que não restaram identificadores obsoletos.

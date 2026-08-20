@@ -95,11 +95,13 @@ Os tópicos são infraestrutura declarativa e versionada no monorepo em `infrast
 
 No ambiente local, o serviço `kafka-init` do Docker Compose executa um script idempotente depois que o Redpanda fica saudável. No Kubernetes, o mesmo princípio será implementado com manifests YAML e um `Job` idempotente, sem Spring Cloud, Helm ou Kustomize nesta fase.
 
-O tópico inicialmente aprovado é:
+A convenção inicial usa um tópico por tipo de evento no formato `market.<contexto>.events.<fato>.v<versão-maior-do-contrato>`. A versão representa incompatibilidade de contrato, e não a versão da aplicação ou do broker. A decisão e suas consequências estão registradas no [ADR 0001](adr/0001-topico-por-tipo-de-evento.md).
 
-| Tópico | Proprietário | Chave | Partições locais | Retenção local |
-|---|---|---|---:|---:|
-| `market.order.events.v1` | `order` | `orderId` | 3 | 7 dias |
+O tópico atualmente aprovado e implementado é:
+
+| Tópico | Evento | `schemaVersion` | Proprietário | Chave | Partições locais | Retenção local |
+|---|---|---:|---|---|---:|---:|
+| `market.order.events.created.v1` | `OrderCreated` | `1` | `order` | `orderId` | 3 | 7 dias |
 
 O fator de replicação local é `1` por existir apenas um broker. Ambientes produtivos com três ou mais brokers deverão usar fator de replicação mínimo `3`. A criação automática de tópicos pelas aplicações não será usada.
 
@@ -182,6 +184,8 @@ sequenceDiagram
 
 Os nomes finais dos comandos, eventos, tópicos e estados serão definidos nas especificações funcionais. O diagrama representa a direção arquitetural, não um contrato definitivo.
 
+O estado implementado ainda não executa esse fluxo de saga. Atualmente, o `order` persiste o pedido `PENDING` e publica somente `OrderCreated`; não existe consumidor no `inventory`, comando `ReserveInventory` nem transições posteriores. O contrato atual está documentado em [`order/docs/kafka-outbox.md`](../order/docs/kafka-outbox.md).
+
 ### 5.1 Compensações
 
 Cada etapa que alterar estado deverá definir sua operação compensatória quando ela for necessária. Por exemplo, se uma etapa posterior à reserva falhar de forma definitiva e a compra não puder continuar, o `order` poderá emitir `ReleaseInventory`.
@@ -212,13 +216,13 @@ Essa abordagem evita a gravação no banco sem a correspondente intenção durá
 
 A implementação inicial poderá usar um publicador próprio com polling e locking no PostgreSQL. A adoção futura de Change Data Capture, como Debezium, exigirá decisão arquitetural específica.
 
-No `order`, o publicador inicial consulta lotes elegíveis com `FOR UPDATE SKIP LOCKED`, publica `OrderCreated` em `market.order.events.v1` e aguarda o acknowledgement do Kafka antes de marcar o registro como `PUBLISHED`. Falhas são reagendadas até o limite configurado; após o limite, o registro fica em `FAILED` para tratamento operacional.
+No `order`, o publicador inicial consulta lotes elegíveis com `FOR UPDATE SKIP LOCKED`, publica `OrderCreated` em `market.order.events.created.v1` e aguarda o acknowledgement do Kafka antes de marcar o registro como `PUBLISHED`. Falhas são reagendadas até o limite configurado; após o limite, o registro fica em `FAILED` para tratamento operacional.
 
 A garantia é **at-least-once**. Se o Kafka confirmar a mensagem e a atualização posterior no PostgreSQL falhar, o evento poderá ser publicado novamente. Todo consumidor deverá deduplicar pelo `eventId`.
 
-### 6.1 Envelope das mensagens
+### 6.1 Envelope alvo e contrato atual
 
-Comandos e eventos deverão carregar ao menos:
+Como convenção alvo para o catálogo futuro, comandos e eventos deverão carregar ao menos:
 
 - `messageId` único;
 - `messageType`;
@@ -231,6 +235,8 @@ Comandos e eventos deverão carregar ao menos:
 - payload do contrato.
 
 Eventos descrevem fatos ocorridos e deverão ser nomeados no passado. Comandos expressam uma solicitação e deverão usar linguagem imperativa. Contratos publicados não deverão expor diretamente entidades JPA.
+
+O contrato `OrderCreated` v1 já implementado antecede a consolidação desse envelope. Ele usa `eventId` e `eventType` no lugar de `messageId` e `messageType`, repete os metadados principais nos headers e ainda não contém `causationId` nem origem explícita. Essa diferença está registrada como limitação do contrato v1 e deverá ser considerada na evolução compatível ou em uma futura versão maior.
 
 ## 7. Persistência e isolamento
 
@@ -438,6 +444,7 @@ Decisões aprovadas:
 - monorepo com serviços implantáveis independentemente;
 - GitHub Actions para CI/CD;
 - tópicos Kafka provisionados declarativamente pela infraestrutura, sem criação no startup dos microsserviços;
+- tópicos de eventos inicialmente separados por tipo, seguindo `market.<contexto>.events.<fato>.v<versão-maior>`;
 - ausência de Spring Cloud e Spring Cloud Kubernetes;
 - segurança funcional adiada para uma fase futura.
 
@@ -446,13 +453,25 @@ Decisões aprovadas:
 As seguintes decisões serão detalhadas por especificações ou ADRs futuros:
 
 - contratos definitivos das APIs REST;
-- catálogo de comandos, eventos e tópicos Kafka;
-- formato de serialização e estratégia de schema registry;
+- expansão do catálogo de comandos, eventos e tópicos Kafka além de `OrderCreated` v1;
+- evolução do formato de serialização e estratégia de Schema Registry além do JSON textual atual;
 - estados completos da saga e suas compensações;
 - canal de envio de notificações;
-- política de retenção da outbox e das mensagens Kafka;
+- política de retenção da Outbox e das mensagens Kafka para ambientes compartilhados e produção;
 - estratégia de reprocessamento da DLT;
 - topologia e requisitos de alta disponibilidade para produção;
 - registry de imagens e promoção entre ambientes;
 - autenticação e autorização;
 - estratégia futura de empacotamento dos manifests Kubernetes.
+
+## 18. Referências documentais
+
+| Documento | Responsabilidade |
+|---|---|
+| [ADR 0001](adr/0001-topico-por-tipo-de-evento.md) | Decisão de tópico por tipo de evento e histórico da migração |
+| [Kafka e Outbox do `order`](../order/docs/kafka-outbox.md) | Contrato `OrderCreated`, configuração, garantias, retry e limitações |
+| [Infraestrutura Kafka](../infrastructure/kafka/README.md) | Catálogo, topologia, provisionamento e verificação pelo `rpk` |
+| [Redpanda Console](../infrastructure/kafka/redpanda-console.md) | Navegação, inspeção de mensagens e diagnóstico local |
+| [Especificação do `order`](../order/docs/spec.md) | Comportamento funcional já implementado |
+| [Plano do `order`](../order/docs/plan.md) | Evolução concluída e próximo marco funcional |
+| [Tarefas do `order`](../order/docs/tasks.md) | Checklist verificável das entregas |

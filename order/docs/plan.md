@@ -2,7 +2,7 @@
 
 ## 1. Estado atual
 
-O microsserviço expõe `GET /api/v1/orders/{orderId}` e `POST /api/v1/orders`. A consulta delega ao `OrderQueryService`, que usa `OrderQueryPort`; o adaptador PostgreSQL implementa a porta com Spring Data JPA. A criação delega ao `CreateOrderService`, que persiste o pedido, seus itens e um evento `OrderCreated` na Transactional Outbox dentro da mesma transação. O schema, a Outbox e o pedido de demonstração são gerenciados pelo Flyway.
+O microsserviço expõe `GET /api/v1/orders/{orderId}` e `POST /api/v1/orders`. A consulta delega ao `OrderQueryService`, que usa `OrderQueryPort`; o adaptador PostgreSQL implementa a porta com Spring Data JPA. A criação delega ao `CreateOrderService`, que persiste o pedido, seus itens e um evento `OrderCreated` na Transactional Outbox dentro da mesma transação. Um publisher agendado envia o evento para `market.order.events.created.v1`, aguarda o acknowledgement e registra sucesso, reagendamento ou falha terminal. O schema, a Outbox e o pedido de demonstração são gerenciados pelo Flyway.
 
 ## 2. Direção arquitetural
 
@@ -12,7 +12,7 @@ A evolução seguirá DDD tático leve e separação pragmática de responsabili
 interfaces/rest/   controller e contratos HTTP
 application/       casos de uso e portas
 domain/            modelo e regras de negócio
-infrastructure/    JPA, PostgreSQL e configurações técnicas
+infrastructure/    JPA, PostgreSQL, Kafka e configurações técnicas
 ```
 
 O controller não deverá conter regras de negócio nem conhecer detalhes de persistência. O Record REST não será usado como entidade de domínio ou entidade JPA.
@@ -125,7 +125,7 @@ O fluxo de criação foi executado com a aplicação conectada ao PostgreSQL loc
 
 Foram implementados:
 
-- tópico declarativo `market.order.events.v1` na infraestrutura compartilhada;
+- tópico declarativo específico para `OrderCreated`, atualmente chamado `market.order.events.created.v1` após o refactor da etapa 9;
 - serviço `kafka-init` idempotente no Docker Compose;
 - Spring Kafka com producer idempotente e acknowledgement `all`;
 - polling agendado da Outbox com lotes configuráveis;
@@ -151,3 +151,17 @@ Foram implementados:
 - Swagger UI com execução interativa habilitada;
 - testes automatizados do documento e da interface;
 - guia operacional em `order/docs/openapi.md`.
+
+## 9. Refactor do tópico `OrderCreated` — concluído
+
+Foi adotada a convenção de tópico por tipo de evento. O refactor alinhou:
+
+- tópico `market.order.events.created.v1`;
+- propriedade `market.kafka.topics.order-created-events`;
+- variável `ORDER_CREATED_EVENTS_TOPIC`;
+- binding `KafkaTopicProperties.orderCreatedEvents()`;
+- provisionador, catálogo, testes e documentação.
+
+Por se tratar de um piloto sem consumidores, não houve alias nem publicação dupla. O tópico atual foi provisionado, o tópico genérico anterior foi removido do Redpanda local e os artefatos rastreados foram regenerados. A suíte completa permaneceu verde com 23 testes.
+
+A decisão está registrada no [ADR 0001](../../docs/adr/0001-topico-por-tipo-de-evento.md), e o contrato operacional completo está em [`kafka-outbox.md`](kafka-outbox.md).

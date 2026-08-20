@@ -3,11 +3,11 @@ package com.market.order.infrastructure.messaging;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 @ConfigurationProperties(prefix = "market.kafka.topics")
-record KafkaTopicProperties(String orderEvents) {
+record KafkaTopicProperties(String orderCreatedEvents) {
 
     KafkaTopicProperties {
-        if (orderEvents == null || orderEvents.isBlank()) {
-            throw new IllegalArgumentException("Order events topic must be configured");
+        if (orderCreatedEvents == null || orderCreatedEvents.isBlank()) {
+            throw new IllegalArgumentException("Order created events topic must be configured");
         }
     }
 }

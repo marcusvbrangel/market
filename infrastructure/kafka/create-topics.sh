@@ -2,7 +2,7 @@
 set -euo pipefail
 
 brokers="${KAFKA_BROKERS:-redpanda:9092}"
-topic="market.order.events.v1"
+topic="market.order.events.created.v1"
 
 if rpk topic describe "${topic}" --brokers "${brokers}" >/dev/null 2>&1; then
   echo "Topic ${topic} already exists"

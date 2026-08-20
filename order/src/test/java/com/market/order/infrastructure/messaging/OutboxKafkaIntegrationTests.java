@@ -30,7 +30,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 @Testcontainers
 class OutboxKafkaIntegrationTests {
 
-    private static final String TOPIC = "market.order.events.v1";
+    private static final String TOPIC = "market.order.events.created.v1";
 
     @Container
     @ServiceConnection

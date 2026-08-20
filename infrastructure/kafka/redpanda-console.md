@@ -16,7 +16,9 @@ Configuração atual:
 | Admin API interna | `http://redpanda:9644` |
 | Rede Docker | `market_net` |
 
-Em 19 de agosto de 2026, o Console foi iniciado com sucesso, respondeu HTTP `200`, conectou-se ao cluster Redpanda e identificou o tópico `market.order.events.v1`. A interface também foi validada manualmente pelo usuário.
+Em 20 de agosto de 2026, após o refactor de nomenclatura, o tópico `market.order.events.created.v1` foi provisionado e validado com três partições. O tópico genérico anterior foi removido do ambiente local. A listagem final do broker contém `_schemas` e o tópico atual.
+
+O contrato completo de `OrderCreated`, incluindo payload, headers e garantias, está em [`order/docs/kafka-outbox.md`](../../order/docs/kafka-outbox.md).
 
 ## Como iniciar
 
@@ -54,7 +56,7 @@ Na página inicial, selecionar o cluster disponível. O menu do Console permite:
 Para consultar os eventos publicados pelo microsserviço `order`:
 
 1. abrir `Topics`;
-2. selecionar `market.order.events.v1`;
+2. selecionar `market.order.events.created.v1`;
 3. abrir a seção de mensagens;
 4. selecionar todas as partições ou a partição desejada;
 5. iniciar a consulta a partir do offset ou instante necessário;
@@ -73,6 +75,20 @@ Uma mensagem `OrderCreated` deve possuir:
 O evento não contém nome nem preço dos produtos.
 
 ## Comandos operacionais
+
+Listar os tópicos do broker:
+
+```bash
+docker compose -f compose.yaml exec -T redpanda \
+  rpk topic list --brokers redpanda:9092
+```
+
+Descrever o tópico de criação de pedidos:
+
+```bash
+docker compose -f compose.yaml exec -T redpanda \
+  rpk topic describe market.order.events.created.v1 --brokers redpanda:9092
+```
 
 Consultar o estado do container:
 
@@ -117,4 +133,5 @@ O Console é uma ferramenta operacional do ambiente local. Nesta fase não há a
 - a porta `8088` deve permanecer acessível somente na máquina de desenvolvimento;
 - o Console não deve ser exposto publicamente;
 - alterações ou exclusões de tópicos e mensagens devem ser feitas com cuidado;
+- excluir um tópico remove suas mensagens e não oferece recuperação pelo próprio broker;
 - uma futura implantação compartilhada deverá definir autenticação, autorização e acesso de rede antes da exposição.

@@ -41,7 +41,7 @@ class TransactionalOutboxPublisherTest {
         var recordCaptor = ArgumentCaptor.forClass(ProducerRecord.class);
         verify(kafkaTemplate).send(recordCaptor.capture());
         var record = recordCaptor.getValue();
-        assertThat(record.topic()).isEqualTo("market.order.events.v1");
+        assertThat(record.topic()).isEqualTo("market.order.events.created.v1");
         assertThat(record.key()).isEqualTo(event.aggregateId().toString());
         assertThat(record.value()).isEqualTo(event.payload());
         assertThat(record.headers().lastHeader("eventId").value())
@@ -70,7 +70,7 @@ class TransactionalOutboxPublisherTest {
         return new TransactionalOutboxPublisher(
                 repository,
                 kafkaTemplate,
-                new KafkaTopicProperties("market.order.events.v1"),
+                new KafkaTopicProperties("market.order.events.created.v1"),
                 new OutboxPublisherProperties(
                         50, maxAttempts, Duration.ofSeconds(5), Duration.ofSeconds(10)
                 )

@@ -29,7 +29,7 @@ spring:
 market:
   kafka:
     topics:
-      order-events: ${ORDER_EVENTS_TOPIC:market.order.events.v1}
+      order-created-events: ${ORDER_CREATED_EVENTS_TOPIC:market.order.events.created.v1}
   outbox:
     publisher:
       enabled: ${OUTBOX_PUBLISHER_ENABLED:true}

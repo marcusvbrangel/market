@@ -2,9 +2,9 @@
 
 ## 1. Objetivo
 
-O microsserviço `order` será responsável pelo ciclo de vida dos pedidos de compra. A consulta por identificador usa domínio, service de aplicação, porta e adaptador PostgreSQL. O pedido de demonstração é persistido por migration Flyway. A criação de pedidos grava o agregado e um evento `OrderCreated` na Transactional Outbox dentro da mesma transação PostgreSQL.
+O microsserviço `order` é responsável pelo ciclo de vida dos pedidos de compra. A consulta por identificador usa domínio, service de aplicação, porta e adaptador PostgreSQL. O pedido de demonstração é persistido por migration Flyway. A criação de pedidos grava o agregado e um evento `OrderCreated` na Transactional Outbox dentro da mesma transação PostgreSQL; um publicador posterior envia o evento ao Kafka.
 
-Esta especificação descreve somente o que já foi aprovado e implementado. A persistência real e as regras completas do ciclo de vida do pedido serão detalhadas conforme as próximas tarefas forem aprovadas.
+Esta especificação descreve o que já foi aprovado e implementado. As regras completas do ciclo de vida, os consumidores e a saga serão detalhados conforme as próximas tarefas forem aprovadas.
 
 ## 2. Tecnologias atuais
 
@@ -14,6 +14,7 @@ Esta especificação descreve somente o que já foi aprovado e implementado. A p
 - Spring MVC por meio de `spring-boot-starter-webmvc`;
 - Jakarta Bean Validation por meio de `spring-boot-starter-validation`;
 - Spring Data JPA;
+- Spring Kafka;
 - PostgreSQL;
 - Flyway;
 - Testcontainers 2.0.5;
@@ -170,6 +171,8 @@ Seus cinco itens são:
 - [x] O contrato de criação não recebe nome nem valores de produto.
 - [x] Pedido, itens e outbox são persistidos na mesma transação.
 - [x] O evento `OrderCreated` é publicado no Kafka a partir da Outbox.
+- [x] O evento é publicado em `market.order.events.created.v1` com `orderId` como chave.
+- [x] A configuração usa `ORDER_CREATED_EVENTS_TOPIC` e binding `orderCreatedEvents`.
 - [x] A Outbox somente é marcada como `PUBLISHED` após o acknowledgement do broker.
 - [x] O fluxo de criação foi validado manualmente com a aplicação conectada ao PostgreSQL local.
 - [x] O pedido, seus itens e o evento correspondente foram confirmados manualmente nas tabelas PostgreSQL.
@@ -191,6 +194,8 @@ Os testes integrados usam PostgreSQL `17.10-alpine` e Kafka em containers tempor
 
 ## 8. Transactional Outbox
 
+O contrato operacional completo é mantido em [`kafka-outbox.md`](kafka-outbox.md). A decisão de usar um tópico por tipo de evento está no [ADR 0001](../../docs/adr/0001-topico-por-tipo-de-evento.md).
+
 A migration `V3__support_order_creation_and_outbox.sql` criou `outbox_events`. Ao criar um pedido, o sistema grava:
 
 - agregado `Order` e seus itens;
@@ -201,13 +206,42 @@ A migration `V3__support_order_creation_and_outbox.sql` criou `outbox_events`. A
 - instante de ocorrência;
 - contador de tentativas iniciado em zero.
 
-O payload contém somente `orderId`, `customerId`, `productId`, `quantity` e metadados do evento. Nome e valores dos produtos não fazem parte do comando de criação nem do evento atual.
+### 8.1 Contrato Kafka
 
-O publicador consulta registros `PENDING` elegíveis periodicamente usando `FOR UPDATE SKIP LOCKED`. Cada evento é enviado para `market.order.events.v1` com `orderId` como chave e os headers `eventId`, `eventType`, `schemaVersion`, `correlationId` e `occurredAt`.
+O payload contém `eventId`, `eventType`, `schemaVersion`, `correlationId`, `orderId`, `customerId`, `items` e `occurredAt`. Cada item contém apenas `productId` e `quantity`. Nome e valores dos produtos não fazem parte do comando de criação nem do evento atual.
+
+O publicador consulta registros `PENDING` elegíveis periodicamente usando `FOR UPDATE SKIP LOCKED`. Cada registro `OrderCreated` elegível é enviado para `market.order.events.created.v1` com `orderId` como chave e os headers `eventId`, `eventType`, `schemaVersion`, `correlationId` e `occurredAt`.
 
 Após o acknowledgement do Kafka, o registro muda para `PUBLISHED` e recebe `published_at`. Uma falha incrementa `attempts`, registra `last_error` e agenda `next_attempt_at`; ao atingir o limite configurado, o registro muda para `FAILED`.
 
 A entrega é at-least-once. Consumidores deverão deduplicar eventos por `eventId`.
+
+Mapeamento oficial:
+
+| Camada | Identificador |
+|---|---|
+| Tópico | `market.order.events.created.v1` |
+| Propriedade Spring | `market.kafka.topics.order-created-events` |
+| Variável de ambiente | `ORDER_CREATED_EVENTS_TOPIC` |
+| Binding Java | `KafkaTopicProperties.orderCreatedEvents()` |
+
+### 8.2 Defaults operacionais
+
+| Configuração | Default |
+|---|---|
+| Bootstrap Kafka | `localhost:19092` |
+| Publisher habilitado | `true` |
+| Intervalo do polling | `1000 ms` |
+| Tamanho do lote | `50` |
+| Máximo de tentativas | `5` |
+| Atraso entre tentativas | `5s` |
+| Timeout de envio | `10s` |
+| Acknowledgement do produtor | `all` |
+| Idempotência do produtor | `true` |
+
+### 8.3 Limitação atual de roteamento
+
+O publicador atual envia todos os registros elegíveis para o tópico de criação e não seleciona o destino por `eventType`. Portanto, somente `OrderCreated` pode ser colocado na fila publicável com segurança até que exista roteamento explícito por contrato.
 
 ## 9. Aceite manual
 
@@ -220,6 +254,8 @@ Após a requisição, foram confirmados diretamente no PostgreSQL:
 - o evento `OrderCreated` na tabela `outbox_events`, com status `PENDING`.
 
 Essa validação confirmou a persistência do pedido e da Outbox antes da inclusão do publicador. A publicação Kafka foi validada posteriormente por teste automatizado integrado com broker real.
+
+Em 20 de agosto de 2026, após o refactor completo de nomenclatura, o tópico atual foi provisionado no Redpanda local, o tópico genérico anterior foi removido e a suíte completa com 23 testes passou. A remoção do tópico anterior foi destrutiva e não permite recuperar suas mensagens pelo broker.
 
 ## 10. Fora do escopo desta entrega
 

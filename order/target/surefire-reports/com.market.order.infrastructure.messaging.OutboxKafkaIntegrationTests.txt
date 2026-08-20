@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: com.market.order.infrastructure.messaging.OutboxKafkaIntegrationTests
 -------------------------------------------------------------------------------
-Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 7.251 s -- in com.market.order.infrastructure.messaging.OutboxKafkaIntegrationTests
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 6.662 s -- in com.market.order.infrastructure.messaging.OutboxKafkaIntegrationTests
